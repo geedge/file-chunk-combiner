@@ -1,4 +1,4 @@
-# file-stream-combiner
+# file-chunk-combiner
 
 
 
