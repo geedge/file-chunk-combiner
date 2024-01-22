@@ -83,7 +83,8 @@ public class FileChunkCombinerTests {
 
     @Before
     public void testBefore() throws Exception {
-        ParameterTool parameterTool = ParameterTool.fromPropertiesFile("C:\\Users\\root\\Documents\\file-chunk-combiner\\src\\main\\resources\\common.properties");
+        String path = FileChunkCombinerTests.class.getClassLoader().getResource("common.properties").getPath();
+        ParameterTool parameterTool = ParameterTool.fromPropertiesFile(path);
         configuration = parameterTool.getConfiguration();
         duplicateChunkCounter = new SimpleCounter();
         combineErrorCounter = new SimpleCounter();
