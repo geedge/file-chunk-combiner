@@ -2,14 +2,11 @@ package com.zdjizhi.utils;
 
 import com.zdjizhi.config.Configs;
 import org.apache.flink.configuration.Configuration;
-import org.apache.http.Header;
 import org.apache.http.HttpEntityEnclosingRequest;
 import org.apache.http.HttpRequest;
 import org.apache.http.NoHttpResponseException;
 import org.apache.http.client.HttpRequestRetryHandler;
 import org.apache.http.client.config.RequestConfig;
-import org.apache.http.client.methods.CloseableHttpResponse;
-import org.apache.http.client.methods.HttpPut;
 import org.apache.http.client.protocol.HttpClientContext;
 import org.apache.http.config.Registry;
 import org.apache.http.config.RegistryBuilder;
@@ -17,13 +14,18 @@ import org.apache.http.conn.socket.ConnectionSocketFactory;
 import org.apache.http.conn.socket.PlainConnectionSocketFactory;
 import org.apache.http.conn.ssl.NoopHostnameVerifier;
 import org.apache.http.conn.ssl.SSLConnectionSocketFactory;
-import org.apache.http.entity.ByteArrayEntity;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.client.HttpClients;
 import org.apache.http.impl.conn.PoolingHttpClientConnectionManager;
+import org.apache.http.impl.nio.client.CloseableHttpAsyncClient;
+import org.apache.http.impl.nio.client.HttpAsyncClients;
+import org.apache.http.impl.nio.conn.PoolingNHttpClientConnectionManager;
+import org.apache.http.impl.nio.reactor.DefaultConnectingIOReactor;
+import org.apache.http.impl.nio.reactor.IOReactorConfig;
+import org.apache.http.nio.reactor.ConnectingIOReactor;
+import org.apache.http.nio.reactor.IOReactorException;
 
 import javax.net.ssl.*;
-import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.net.ConnectException;
 import java.net.UnknownHostException;
@@ -34,19 +36,10 @@ import java.security.cert.X509Certificate;
 public class HttpClientUtil {
 
     private static HttpClientUtil httpClientUtil;
-    private final CloseableHttpClient closeableHttpClient;
     private final Configuration configuration;
 
     private HttpClientUtil(Configuration configuration) {
         this.configuration = configuration;
-        closeableHttpClient = HttpClients.custom()
-                // 把请求相关的超时信息设置到连接客户端
-                .setDefaultRequestConfig(getRequestConfig())
-                // 把请求重试设置到连接客户端
-                .setRetryHandler(getRetryHandler())
-                // 配置连接池管理对象
-                .setConnectionManager(getSslClientManager())
-                .build();
     }
 
     private RequestConfig getRequestConfig() {
@@ -87,7 +80,7 @@ public class HttpClientUtil {
         };
     }
 
-    private PoolingHttpClientConnectionManager getSslClientManager() {
+    private PoolingHttpClientConnectionManager getSyncSslClientManager() {
         PoolingHttpClientConnectionManager connManager;
         try {
             X509TrustManager trustManager = new X509TrustManager() {
@@ -122,6 +115,45 @@ public class HttpClientUtil {
         return connManager;
     }
 
+    private PoolingNHttpClientConnectionManager getAsyncSslClientManager() {
+        PoolingNHttpClientConnectionManager connManager;
+        try {
+//            X509TrustManager trustManager = new X509TrustManager() {
+//                @Override
+//                public X509Certificate[] getAcceptedIssuers() {
+//                    return null;
+//                }
+//
+//                @Override
+//                public void checkClientTrusted(X509Certificate[] xcs, String str) {
+//                }
+//
+//                @Override
+//                public void checkServerTrusted(X509Certificate[] xcs, String str) {
+//                }
+//            };
+//            SSLContext sslContext = SSLContext.getInstance(SSLConnectionSocketFactory.TLS);
+//            sslContext.init(null, new TrustManager[]{trustManager}, null);
+//            SSLIOSessionStrategy sslioSessionStrategy = new SSLIOSessionStrategy(sslContext, SSLIOSessionStrategy.ALLOW_ALL_HOSTNAME_VERIFIER);
+//            SSLIOSessionStrategy defaultStrategy = SSLIOSessionStrategy.getDefaultStrategy();
+//            Registry<SchemeIOSessionStrategy> schemeIOSessionStrategyRegistry = RegistryBuilder.<SchemeIOSessionStrategy>create()
+//                    .register("http", NoopIOSessionStrategy.INSTANCE)
+//                    .register("https", sslioSessionStrategy).build();
+
+            IOReactorConfig ioReactorConfig = IOReactorConfig.custom()
+                    .setIoThreadCount(Runtime.getRuntime().availableProcessors())
+                    .setSoKeepAlive(true)
+                    .build();
+            ConnectingIOReactor ioReactor = new DefaultConnectingIOReactor(ioReactorConfig);
+            connManager = new PoolingNHttpClientConnectionManager(ioReactor);
+            connManager.setMaxTotal(configuration.get(Configs.SINK_HOS_HTTP_MAX_TOTAL));
+            connManager.setDefaultMaxPerRoute(configuration.get(Configs.SINK_HOS_HTTP_MAX_PER_ROUTE));
+        } catch (IOReactorException e) {
+            throw new RuntimeException(e.getMessage());
+        }
+        return connManager;
+    }
+
     public static synchronized HttpClientUtil getInstance(Configuration configuration) {
         if (null == httpClientUtil) {
             httpClientUtil = new HttpClientUtil(configuration);
@@ -129,20 +161,19 @@ public class HttpClientUtil {
         return httpClientUtil;
     }
 
-    public void close() throws IOException {
-        closeableHttpClient.close();
+    public CloseableHttpClient getSyncHttpClient() {
+        return HttpClients.custom()
+                .setDefaultRequestConfig(getRequestConfig())
+                .setRetryHandler(getRetryHandler())
+                .setConnectionManager(getSyncSslClientManager())
+                .build();
     }
 
-    public CloseableHttpResponse httpPut(String url, byte[] requestBody, Header... headers) throws IOException {
-        HttpPut put = new HttpPut(url);
-        if (StringUtil.isNotEmpty(headers)) {
-            for (Header header : headers) {
-                if (StringUtil.isNotEmpty(header)) {
-                    put.addHeader(header);
-                }
-            }
-        }
-        put.setEntity(new ByteArrayEntity(requestBody));
-        return closeableHttpClient.execute(put);
+    public CloseableHttpAsyncClient getAsyncHttpClient() {
+        return HttpAsyncClients.custom()
+                .setDefaultRequestConfig(getRequestConfig())
+                .setConnectionManager(getAsyncSslClientManager())
+                .build();
     }
+
 }

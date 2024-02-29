@@ -9,9 +9,6 @@ public class Configs {
             .defaultValue("FILE-CHUNK-COMBINER")
             .withDescription("The name of job.");
 
-    public static final ConfigOption<Integer> SOURCE_KAFKA_PARALLELISM = ConfigOptions.key("source.kafka.parallelism")
-            .intType()
-            .defaultValue(1);
     public static final ConfigOption<String> KAFKA_BROKER = ConfigOptions.key("source.kafka.broker")
             .stringType()
             .noDefaultValue();
@@ -46,9 +43,6 @@ public class Configs {
             .stringType()
             .noDefaultValue();
 
-    public static final ConfigOption<Integer> PARSE_MESSAGE_PACK_PARALLELISM = ConfigOptions.key("parse.message.pack.parallelism")
-            .intType()
-            .defaultValue(1);
     public static final ConfigOption<Integer> COMBINER_WINDOW_PARALLELISM = ConfigOptions.key("combiner.window.parallelism")
             .intType()
             .defaultValue(1);
@@ -58,13 +52,28 @@ public class Configs {
     public static final ConfigOption<Long> COMBINER_WINDOW_IDLE_TIME = ConfigOptions.key("combiner.window.idle.time")
             .longType()
             .defaultValue(5L);
-    public static final ConfigOption<Long> COMBINER_WINDOW_KEY_MAX_CHUNK = ConfigOptions.key("combiner.window.key.max.chunk")
-            .longType()
-            .defaultValue(5L);
 
-    public static final ConfigOption<Integer> SINK_HOS_PARALLELISM = ConfigOptions.key("sink.hos.parallelism")
+    public static final ConfigOption<String> SINK_TYPE = ConfigOptions.key("sink.type")
+            .stringType()
+            .defaultValue("hos");
+    public static final ConfigOption<Integer> SINK_PARALLELISM = ConfigOptions.key("sink.parallelism")
             .intType()
             .defaultValue(1);
+    public static final ConfigOption<Boolean> SINK_ASYNC = ConfigOptions.key("sink.async")
+            .booleanType()
+            .defaultValue(false);
+    public static final ConfigOption<Boolean> SINK_BATCH = ConfigOptions.key("sink.batch")
+            .booleanType()
+            .defaultValue(false);
+    public static final ConfigOption<Integer> SINK_BATCH_COUNT = ConfigOptions.key("sink.batch.count")
+            .intType()
+            .defaultValue(1);
+    public static final ConfigOption<Long> SINK_BATCH_SIZE = ConfigOptions.key("sink.batch.size")
+            .longType()
+            .defaultValue(Long.MAX_VALUE);
+    public static final ConfigOption<Integer> SINK_HOS_LOAD_BALANCE_MODE = ConfigOptions.key("sink.hos.load.balance.mode")
+            .intType()
+            .defaultValue(0);
     public static final ConfigOption<String> SINK_HOS_ENDPOINT = ConfigOptions.key("sink.hos.endpoint")
             .stringType()
             .noDefaultValue();
@@ -73,7 +82,7 @@ public class Configs {
             .noDefaultValue();
     public static final ConfigOption<String> SINK_HOS_TOKEN = ConfigOptions.key("sink.hos.token")
             .stringType()
-            .noDefaultValue();
+            .defaultValue("");
     public static final ConfigOption<Integer> SINK_HOS_HTTP_MAX_TOTAL = ConfigOptions.key("sink.hos.http.max.total")
             .intType()
             .defaultValue(2000);
@@ -92,5 +101,31 @@ public class Configs {
     public static final ConfigOption<Integer> SINK_HOS_HTTP_SOCKET_TIMEOUT = ConfigOptions.key("sink.hos.http.socket.timeout")
             .intType()
             .defaultValue(60000);
+
+    public static final ConfigOption<String> SINK_HBASE_ZOOKEEPER = ConfigOptions.key("sink.hbase.zookeeper")
+            .stringType()
+            .defaultValue("");
+    public static final ConfigOption<Integer> SINK_HBASE_RETRIES_NUMBER = ConfigOptions.key("sink.hbase.retries.number")
+            .intType()
+            .defaultValue(10);
+    public static final ConfigOption<Integer> SINK_HBASE_RPC_TIMEOUT = ConfigOptions.key("sink.hbase.rpc.timeout")
+            .intType()
+            .defaultValue(600000);
+    public static final ConfigOption<Integer> SINK_HBASE_CLIENT_WRITE_BUFFER = ConfigOptions.key("sink.hbase.client.write.buffer")
+            .intType()
+            .defaultValue(10485760);
+    public static final ConfigOption<Integer> SINK_HBASE_CLIENT_IPC_POOL_SIZE = ConfigOptions.key("sink.hbase.client.ipc.pool.size")
+            .intType()
+            .defaultValue(1);
+
+    public static final ConfigOption<Integer> FILE_MAX_CHUNK_COUNT = ConfigOptions.key("file.max.chunk.count")
+            .intType()
+            .defaultValue(100000);
+    public static final ConfigOption<Long> FILE_MAX_SIZE = ConfigOptions.key("file.max.size")
+            .longType()
+            .defaultValue(10737418240L);
+    public static final ConfigOption<String> FILTER_EXPRESSION = ConfigOptions.key("filter.expression")
+            .stringType()
+            .defaultValue("");
 
 }

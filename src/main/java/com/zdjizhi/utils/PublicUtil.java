@@ -1,24 +1,18 @@
 package com.zdjizhi.utils;
 
-import cn.hutool.core.io.IoUtil;
 import cn.hutool.core.util.ArrayUtil;
-import cn.hutool.core.util.CharUtil;
 import cn.hutool.core.util.StrUtil;
+import cn.hutool.crypto.digest.DigestUtil;
 import cn.hutool.log.Log;
 import cn.hutool.log.LogFactory;
-import com.zdjizhi.config.Configs;
 import com.zdjizhi.pojo.FileChunk;
-import org.apache.flink.configuration.Configuration;
 import org.apache.flink.metrics.Counter;
-import org.apache.http.Header;
-import org.apache.http.client.methods.CloseableHttpResponse;
-import org.apache.http.message.BasicHeader;
-import org.apache.http.util.EntityUtils;
 
-import java.io.IOException;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.StreamSupport;
+
+import static com.zdjizhi.utils.PublicConstants.COMBINE_MODE_SEEK;
 
 public class PublicUtil {
     private static final Log LOG = LogFactory.get();
@@ -27,8 +21,9 @@ public class PublicUtil {
         List<FileChunk> combinedFileChunkList = new ArrayList<>();
         try {
             List<FileChunk> originalFileChunkList = StreamSupport.stream(input.spliterator(), false).collect(Collectors.toList());
+            System.out.println(originalFileChunkList);
             List<byte[]> waitingToCombineChunkList = new ArrayList<>();
-            if ("seek".equals(originalFileChunkList.get(0).getCombineMode())) {
+            if (COMBINE_MODE_SEEK.equals(originalFileChunkList.get(0).getCombineMode())) {
                 seekChunkCounter.inc();
                 // 按照offset排序
                 originalFileChunkList.sort(Comparator.comparingLong(FileChunk::getOffset));
@@ -118,7 +113,7 @@ public class PublicUtil {
         byte[][] bytes = new byte[byteList.size()][];
         byteList.toArray(bytes);
         byte[] newData = ArrayUtil.addAll(bytes);
-        if ("seek".equals(combineMode)) {
+        if (COMBINE_MODE_SEEK.equals(combineMode)) {
             fileChunk.setOffset(offset);
             fileChunk.setLastChunkFlag(lastChunkFlag);
         } else {
@@ -137,55 +132,17 @@ public class PublicUtil {
         return fileChunk;
     }
 
-    public static void sendToHos(FileChunk fileChunk, Configuration configuration,Counter sendHosErrorCounter){
-        CloseableHttpResponse response = null;
-        try {
-            String url = configuration.get(Configs.SINK_HOS_ENDPOINT) + "/" + configuration.get(Configs.SINK_HOS_BUCKET) + "/" + fileChunk.getUuid();
-            byte[] data;
-            if (fileChunk.getChunk() != null) {
-                data = fileChunk.getChunk();
-            } else {
-                data = "".getBytes();
-            }
-            List<Header> headers = new ArrayList<>();
-            headers.add(new BasicHeader("token", configuration.get(Configs.SINK_HOS_TOKEN)));
-            headers.add(new BasicHeader("x-hos-upload-type", "appendV2"));
-            headers.add(new BasicHeader("x-hos-combine-mode", fileChunk.getCombineMode()));
-            String filename = fileChunk.getFileName();
-            if (StrUtil.isNotEmpty(filename) && filename.contains(".")) {
-                headers.add(new BasicHeader("x-hos-meta-filename", filename));
-            } else if (StrUtil.isNotEmpty(filename) && !filename.contains(".")) {
-                filename = filename + "." + fileChunk.getFileType();
-                headers.add(new BasicHeader("x-hos-meta-filename", filename));
-            } else if (StrUtil.isEmpty(filename) && StrUtil.isNotEmpty(fileChunk.getFileType())) {
-                headers.add(new BasicHeader("x-hos-meta-file-type", fileChunk.getFileType()));
-            }
-            if ("seek".equals(fileChunk.getCombineMode())) {
-                headers.add(new BasicHeader("x-hos-offset", fileChunk.getOffset() + ""));
-                headers.add(new BasicHeader("x-hos-part-last-flag", fileChunk.getLastChunkFlag() + ""));
-            } else {
-                headers.add(new BasicHeader("x-hos-part-number", fileChunk.getTimestamp() + ""));
-                headers.add(new BasicHeader("x-hos-part-chunk-numbers", fileChunk.getChunkNumbers()));
-            }
-            headers.add(new BasicHeader("x-hos-part-chunk-count", fileChunk.getChunkCount() + ""));
-            Map<String, Object> metaMap = fileChunk.getMeta();
-            if (metaMap != null && metaMap.size() > 0) {
-                for (String meta : metaMap.keySet()) {
-                    headers.add(new BasicHeader("x-hos-meta-" + StrUtil.toSymbolCase(meta, CharUtil.DASHED), metaMap.get(meta) + ""));
-                }
-            }
-            response = HttpClientUtil.getInstance(configuration).httpPut(url, data, headers.toArray(new Header[0]));
-            if (response.getStatusLine().getStatusCode() != 200) {
-                String responseEntity = EntityUtils.toString(response.getEntity(), "UTF-8");
-                LOG.error("put part to hos error. code: " + response.getStatusLine().getStatusCode() + ". message: " + responseEntity);
-                sendHosErrorCounter.inc();
-            }
-        } catch (IOException e) {
-            LOG.error("put part to hos error.", e);
-            sendHosErrorCounter.inc();
-        } finally {
-            IoUtil.close(response);
-        }
+    public static String getUUID() {
+        return UUID.randomUUID().toString().replace("-", "").toLowerCase();
     }
 
+    public static String getRowKey(String filename) {
+        String md5str = DigestUtil.md5Hex(filename);
+        md5str = md5str.substring(8, 24);
+        return md5str;
+    }
+
+    public static String getIndexDataHead(String filename) {
+        return getRowKey(filename).substring(0, 1);
+    }
 }

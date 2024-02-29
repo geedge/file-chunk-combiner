@@ -10,7 +10,7 @@ import org.apache.flink.streaming.api.functions.windowing.ProcessWindowFunction;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.util.Collector;
 
-import java.util.List;
+import java.util.*;
 
 public class CombineChunkProcessWindowFunction extends ProcessWindowFunction<FileChunk, FileChunk, String, TimeWindow> {
 
@@ -35,8 +35,8 @@ public class CombineChunkProcessWindowFunction extends ProcessWindowFunction<Fil
     }
 
     @Override
-    public void process(String string, Context context, Iterable<FileChunk> elements, Collector<FileChunk> out) throws Exception {
-        List<FileChunk> fileChunks = PublicUtil.combine(elements, configuration.get(Configs.COMBINER_WINDOW_KEY_MAX_CHUNK), duplicateChunkCounter, combineErrorCounter, seekChunkCounter, appendChunkCounter);
+    public void process(String string, Context context, Iterable<FileChunk> elements, Collector<FileChunk> out) {
+        List<FileChunk> fileChunks = PublicUtil.combine(elements, configuration.get(Configs.FILE_MAX_CHUNK_COUNT), duplicateChunkCounter, combineErrorCounter, seekChunkCounter, appendChunkCounter);
         for (FileChunk fileChunk : fileChunks) {
             out.collect(fileChunk);
         }
