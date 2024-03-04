@@ -127,5 +127,4 @@ public class Configs {
     public static final ConfigOption<String> FILTER_EXPRESSION = ConfigOptions.key("filter.expression")
             .stringType()
             .defaultValue("");
-
 }

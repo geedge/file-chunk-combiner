@@ -175,5 +175,4 @@ public class HttpClientUtil {
                 .setConnectionManager(getAsyncSslClientManager())
                 .build();
     }
-
 }

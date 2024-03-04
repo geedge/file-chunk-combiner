@@ -206,5 +206,4 @@ public class HBaseSink extends RichSinkFunction<FileChunk> {
         IoUtil.close(syncHBaseConnection);
         IoUtil.close(AsyncHBaseConnection);
     }
-
 }

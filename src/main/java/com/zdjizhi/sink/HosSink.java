@@ -178,7 +178,7 @@ public class HosSink extends RichSinkFunction<FileChunk> {
                     httpPut.setHeader(HOS_META_PREFIX + StrUtil.toSymbolCase(meta, CharUtil.DASHED), metaMap.get(meta) + "");
                 }
             }
-            httpPut.setEntity(new ByteArrayEntity(fileChunk.getChunk()));
+            httpPut.setEntity(new ByteArrayEntity(data));
             executeRequest(httpPut);
         }
     }
@@ -242,5 +242,4 @@ public class HosSink extends RichSinkFunction<FileChunk> {
             }
         }
     }
-
 }

@@ -3,7 +3,6 @@ package com.zdjizhi.utils;
 import org.apache.hadoop.hbase.util.Bytes;
 
 public interface HBaseColumnConstants {
-
     String FAMILY_DATA = "data";
     String FAMILY_META = "meta";
     String COLUMN_FILENAME = "filename";
@@ -46,5 +45,4 @@ public interface HBaseColumnConstants {
     byte[] BYTE_BUCKET_COLUMN_TTL = Bytes.toBytes(BUCKET_COLUMN_TTL);
     byte[] BYTE_BUCKET_COLUMN_WAL = Bytes.toBytes(BUCKET_COLUMN_WAL);
     byte[] BYTE_BUCKET_COLUMN_LOCATION = Bytes.toBytes(BUCKET_COLUMN_LOCATION);
-
 }

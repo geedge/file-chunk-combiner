@@ -6,6 +6,8 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.metrics.Counter;
 import org.apache.flink.metrics.MetricGroup;
 
+import static com.zdjizhi.utils.PublicConstants.COMBINE_MODE_SEEK;
+
 public class SideOutputMapFunction extends RichMapFunction<FileChunk, FileChunk> {
 
     private transient Counter pcapDelayedChunkCounter;
@@ -22,7 +24,7 @@ public class SideOutputMapFunction extends RichMapFunction<FileChunk, FileChunk>
     @Override
     public FileChunk map(FileChunk fileChunk) {
         fileChunk.setChunkCount(1);
-        if ("seek".equals(fileChunk.getCombineMode())) {
+        if (COMBINE_MODE_SEEK.equals(fileChunk.getCombineMode())) {
             trafficDelayedChunkCounter.inc();
         } else {
             fileChunk.setChunkNumbers(fileChunk.getTimestamp() + "-" + fileChunk.getChunk().length + ";");
@@ -30,5 +32,4 @@ public class SideOutputMapFunction extends RichMapFunction<FileChunk, FileChunk>
         }
         return fileChunk;
     }
-
 }

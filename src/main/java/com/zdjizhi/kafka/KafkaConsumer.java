@@ -43,5 +43,4 @@ public abstract class KafkaConsumer extends ByteArrayDeserializationSchema {
         kafkaConsumer.setStartFromGroupOffsets();
         return kafkaConsumer;
     }
-
 }

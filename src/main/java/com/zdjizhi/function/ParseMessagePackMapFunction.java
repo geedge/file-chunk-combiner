@@ -75,5 +75,4 @@ public class ParseMessagePackMapFunction extends RichMapFunction<byte[], FileChu
         }
         return fileChunk;
     }
-
 }
