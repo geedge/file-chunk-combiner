@@ -1,7 +1,6 @@
 package com.zdjizhi.utils;
 
 import cn.hutool.core.util.ArrayUtil;
-import cn.hutool.core.util.StrUtil;
 import cn.hutool.crypto.digest.DigestUtil;
 import cn.hutool.log.Log;
 import cn.hutool.log.LogFactory;
@@ -21,7 +20,6 @@ public class PublicUtil {
         List<FileChunk> combinedFileChunkList = new ArrayList<>();
         try {
             List<FileChunk> originalFileChunkList = StreamSupport.stream(input.spliterator(), false).collect(Collectors.toList());
-            System.out.println(originalFileChunkList);
             List<byte[]> waitingToCombineChunkList = new ArrayList<>();
             if (COMBINE_MODE_SEEK.equals(originalFileChunkList.get(0).getCombineMode())) {
                 seekChunkCounter.inc();

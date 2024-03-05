@@ -22,6 +22,30 @@ public class FileChunk implements Serializable {
     public FileChunk() {
     }
 
+    public FileChunk(String uuid, String fileType, long length, byte[] chunk, String combineMode, int chunkCount, long timestamp, Map<String, Object> meta, String chunkNumbers) {
+        this.uuid = uuid;
+        this.fileType = fileType;
+        this.length = length;
+        this.chunk = chunk;
+        this.combineMode = combineMode;
+        this.chunkCount = chunkCount;
+        this.timestamp = timestamp;
+        this.meta = meta;
+        this.chunkNumbers = chunkNumbers;
+    }
+
+    public FileChunk(String uuid, String fileType, long offset, long length, byte[] chunk, String combineMode, int lastChunkFlag, int chunkCount, long timestamp) {
+        this.uuid = uuid;
+        this.fileType = fileType;
+        this.offset = offset;
+        this.length = length;
+        this.chunk = chunk;
+        this.combineMode = combineMode;
+        this.lastChunkFlag = lastChunkFlag;
+        this.chunkCount = chunkCount;
+        this.timestamp = timestamp;
+    }
+
     public String getChunkNumbers() {
         return chunkNumbers;
     }

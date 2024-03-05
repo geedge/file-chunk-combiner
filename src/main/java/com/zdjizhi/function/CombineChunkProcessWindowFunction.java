@@ -15,9 +15,9 @@ import java.util.*;
 public class CombineChunkProcessWindowFunction extends ProcessWindowFunction<FileChunk, FileChunk, String, TimeWindow> {
 
     private transient Counter duplicateChunkCounter;
-    private transient Counter combineErrorCounter;
-    private transient Counter seekChunkCounter;
-    private transient Counter appendChunkCounter;
+    public transient Counter combineErrorCounter;
+    public transient Counter seekChunkCounter;
+    public transient Counter appendChunkCounter;
     private final Configuration configuration;
 
     public CombineChunkProcessWindowFunction(Configuration configuration) {

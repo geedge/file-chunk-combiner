@@ -42,7 +42,7 @@ public class FileChunkCombiner {
                 .name("Kafka Source")
                 .map(new ParseMessagePackMapFunction())
                 .name("Map: Parse Message Pack")
-                .filter(new FileChunkFilter(configuration.getLong(Configs.FILE_MAX_SIZE), configuration.getString(Configs.FILTER_EXPRESSION)))
+                .filter(new FileChunkFilterFunction(configuration.getLong(Configs.FILE_MAX_SIZE), configuration.getString(Configs.FILTER_EXPRESSION)))
                 .assignTimestampsAndWatermarks(watermarkStrategy);
 
         OutputTag<FileChunk> delayedChunkOutputTag = new OutputTag<FileChunk>("delayed-chunk") {
@@ -82,5 +82,4 @@ public class FileChunkCombiner {
 
         environment.execute(configuration.get(Configs.FLINK_JOB_NAME));
     }
-
 }

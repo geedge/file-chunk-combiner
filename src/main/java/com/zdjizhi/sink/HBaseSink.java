@@ -28,10 +28,10 @@ public class HBaseSink extends RichSinkFunction<FileChunk> {
     private static final Log LOG = LogFactory.get();
 
     private final Configuration configuration;
-    private transient Counter sendHBaseCounter;
-    private transient Counter sendHBaseErrorCounter;
-    private transient Counter sendHBaseFileCounter;
-    private transient Counter sendHBaseChunkCounter;
+    public transient Counter sendHBaseCounter;
+    public transient Counter sendHBaseErrorCounter;
+    public transient Counter sendHBaseFileCounter;
+    public transient Counter sendHBaseChunkCounter;
     private boolean isAsync;
     private Connection syncHBaseConnection;
     private AsyncConnection AsyncHBaseConnection;
@@ -165,7 +165,7 @@ public class HBaseSink extends RichSinkFunction<FileChunk> {
                         } catch (IOException | InterruptedException e) {
                             LOG.error("put chunk to hbase data table error. ", e.getMessage());
                             sendHBaseErrorCounter.inc();
-                        }finally {
+                        } finally {
                             dataPutList.clear();
                         }
                     }
@@ -176,7 +176,7 @@ public class HBaseSink extends RichSinkFunction<FileChunk> {
                         } catch (IOException | InterruptedException e) {
                             LOG.error("put chunk to hbase index time table error. ", e.getMessage());
                             sendHBaseErrorCounter.inc();
-                        }finally {
+                        } finally {
                             indexTimePutList.clear();
                         }
                     }
@@ -187,7 +187,7 @@ public class HBaseSink extends RichSinkFunction<FileChunk> {
                         } catch (IOException | InterruptedException e) {
                             LOG.error("put chunk to hbase index filename table error. ", e.getMessage());
                             sendHBaseErrorCounter.inc();
-                        }finally {
+                        } finally {
                             indexFilenamePutList.clear();
                         }
                     }

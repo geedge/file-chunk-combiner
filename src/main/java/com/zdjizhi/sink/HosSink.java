@@ -35,10 +35,10 @@ public class HosSink extends RichSinkFunction<FileChunk> {
     private static final Log LOG = LogFactory.get();
 
     private final Configuration configuration;
-    private transient Counter sendHosCounter;
-    private transient Counter sendHosErrorCounter;
-    private transient Counter sendHosFileCounter;
-    private transient Counter sendHosChunkCounter;
+    public transient Counter sendHosCounter;
+    public transient Counter sendHosErrorCounter;
+    public transient Counter sendHosFileCounter;
+    public transient Counter sendHosChunkCounter;
     private boolean isAsync;
     private CloseableHttpClient syncHttpClient;
     private CloseableHttpAsyncClient asyncHttpClient;

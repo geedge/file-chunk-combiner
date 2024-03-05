@@ -8,14 +8,14 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.metrics.Counter;
 import org.apache.flink.metrics.MetricGroup;
 
-public class FileChunkFilter extends RichFilterFunction<FileChunk> {
+public class FileChunkFilterFunction extends RichFilterFunction<FileChunk> {
     private final long maxFileSize;
     private final String filterExpression;
     private transient Counter filterChunkCounter;
     private JexlExpression jexlExpression;
     private JexlContext jexlContext;
 
-    public FileChunkFilter(long maxFileSize, String filterExpression) {
+    public FileChunkFilterFunction(long maxFileSize, String filterExpression) {
         this.maxFileSize = maxFileSize;
         this.filterExpression = filterExpression;
     }
