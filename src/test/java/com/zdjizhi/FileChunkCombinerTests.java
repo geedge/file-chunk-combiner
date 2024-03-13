@@ -4,36 +4,29 @@ import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.ArrayUtil;
 import cn.hutool.core.util.RandomUtil;
 import com.zdjizhi.config.Configs;
-import com.zdjizhi.function.CombineChunkProcessWindowFunction;
-import com.zdjizhi.function.FileChunkFilterFunction;
-import com.zdjizhi.function.FileChunkKeySelector;
-import com.zdjizhi.function.ParseMessagePackMapFunction;
+import com.zdjizhi.function.*;
 import com.zdjizhi.pojo.FileChunk;
 import com.zdjizhi.sink.HBaseSink;
 import com.zdjizhi.sink.HosSink;
 import com.zdjizhi.trigger.LastChunkOrNoDataInTimeTrigger;
 import com.zdjizhi.trigger.MultipleTrigger;
-import com.zdjizhi.utils.PublicUtil;
 import org.apache.flink.api.common.ExecutionConfig;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
-import org.apache.flink.api.common.functions.FilterFunction;
 import org.apache.flink.api.common.functions.RuntimeContext;
-import org.apache.flink.api.common.state.ListStateDescriptor;
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
-import org.apache.flink.api.common.typeutils.base.ListSerializer;
 import org.apache.flink.api.java.typeutils.PojoTypeInfo;
 import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.configuration.Configuration;
-import org.apache.flink.metrics.Counter;
-import org.apache.flink.metrics.SimpleCounter;
-import org.apache.flink.runtime.state.JavaSerializer;
 import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
+import org.apache.flink.streaming.api.datastream.DataStream;
+import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.SinkFunction;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
 import org.apache.flink.streaming.api.functions.windowing.ProcessWindowFunction;
 import org.apache.flink.streaming.api.operators.*;
+import org.apache.flink.streaming.api.transformations.OneInputTransformation;
 import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows;
 import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.api.windowing.triggers.EventTimeTrigger;
@@ -49,6 +42,7 @@ import org.apache.flink.streaming.util.TestHarnessUtil;
 import org.apache.flink.streaming.util.functions.StreamingFunctionUtils;
 import org.apache.flink.test.util.MiniClusterWithClientResource;
 import org.apache.flink.util.Collector;
+import org.apache.flink.util.OutputTag;
 import org.junit.*;
 import org.mockito.Mockito;
 import org.mockito.invocation.InvocationOnMock;
@@ -60,38 +54,28 @@ import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 public class FileChunkCombinerTests {
-    private static Counter duplicateChunkCounter;
-    private static Counter combineErrorCounter;
-    private static Counter seekChunkCounter;
-    private static Counter appendChunkCounter;
     private File emlFile;
     private byte[] emlFileBytes;
     private byte[] pcapngFileBytes;
     private List<FileChunk> inputFileChunks;
+    private List<FileChunk> inputFiles;
     private List<byte[]> messagePackList;
     private List<FileChunk> emlFileChunks;
     private List<FileChunk> pcapngFileChunks;
     private List<FileChunk> pcapngIncludeMetaFileChunks;
     private Map<String, Object> pcapngFileMeta;
-    private String emlUuid = "1111111111";
-    private String pcapngUuid = "2222222222";
-    private String pcapngIncludeMetaUuid = "3333333333";
     private int emlChunkCount = 10;
     private int pcapngChunkCount = 10;
-    private long maxChunkCount;
     private String pcapChunkData = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     private static Configuration configuration;
+    private CombineChunkProcessWindowFunction processWindowFunction;
+    private OutputTag<FileChunk> delayedChunkOutputTag;
+    private KeyedOneInputStreamOperatorTestHarness<String, FileChunk, FileChunk> testHarness;
 
     @Before
     public void testBefore() throws Exception {
-        String path = FileChunkCombinerTests.class.getClassLoader().getResource("common.properties").getPath();
-        ParameterTool parameterTool = ParameterTool.fromPropertiesFile(path);
+        ParameterTool parameterTool = ParameterTool.fromPropertiesFile(FileChunkCombinerTests.class.getClassLoader().getResource("common.properties").getPath());
         configuration = parameterTool.getConfiguration();
-        duplicateChunkCounter = new SimpleCounter();
-        combineErrorCounter = new SimpleCounter();
-        seekChunkCounter = new SimpleCounter();
-        appendChunkCounter = new SimpleCounter();
-        maxChunkCount = configuration.get(Configs.FILE_MAX_CHUNK_COUNT);
         String filePath = "src" + File.separator + "test" + File.separator + "data" + File.separator + "test.eml";
         emlFile = new File(filePath);
         emlFileBytes = FileUtil.readBytes(emlFile);
@@ -104,38 +88,68 @@ public class FileChunkCombinerTests {
         pcapngFileMeta.put("ruleId", 151);
         pcapngFileMeta.put("taskId", 7477);
         pcapngFileMeta.put("sledIP", "127.0.0.1");
-        inputFileChunks = new ArrayList<>();
         emlFileChunks = new ArrayList<>();
         pcapngFileChunks = new ArrayList<>();
         pcapngIncludeMetaFileChunks = new ArrayList<>();
-        ParseMessagePackMapFunction mapFunction = new ParseMessagePackMapFunction();
-        ObjectInputStream inputStream = new ObjectInputStream(new FileInputStream("src" + File.separator + "test" + File.separator + "data" + File.separator + "messagePacks"));
-        messagePackList = (List<byte[]>) inputStream.readObject();
-        for (byte[] messagePack : messagePackList) {
-            FileChunk fileChunk = mapFunction.map(messagePack);
-            inputFileChunks.add(fileChunk);
-        }
+        ObjectInputStream messagePacksInputStream = new ObjectInputStream(new FileInputStream("src" + File.separator + "test" + File.separator + "data" + File.separator + "messagePacks"));
+        messagePackList = (List<byte[]>) messagePacksInputStream.readObject();
+        messagePacksInputStream.close();
+        ObjectInputStream fileChunksInputStream = new ObjectInputStream(new FileInputStream("src" + File.separator + "test" + File.separator + "data" + File.separator + "fileChunks"));
+        inputFileChunks = (List<FileChunk>) fileChunksInputStream.readObject();
+        fileChunksInputStream.close();
+        ObjectInputStream filesInputStream = new ObjectInputStream(new FileInputStream("src" + File.separator + "test" + File.separator + "data" + File.separator + "files"));
+        inputFiles = (List<FileChunk>) filesInputStream.readObject();
+        filesInputStream.close();
+        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        List<Trigger<Object, TimeWindow>> triggers = new ArrayList<>();
+        triggers.add(EventTimeTrigger.create());
+        triggers.add(LastChunkOrNoDataInTimeTrigger.of(1000));
+        Trigger<Object, TimeWindow> trigger = MultipleTrigger.of(triggers);
+        processWindowFunction = new CombineChunkProcessWindowFunction(Integer.MAX_VALUE);
+        delayedChunkOutputTag = new OutputTag<>("delayed-chunk") {};
+        DataStreamSource<FileChunk> source = env.fromCollection(inputFileChunks);
+        DataStream<FileChunk> window = source
+                .keyBy(new FileChunkKeySelector())
+                .window(TumblingEventTimeWindows.of(Time.seconds(3)))
+                .trigger(trigger)
+                .sideOutputLateData(delayedChunkOutputTag)
+                .process(processWindowFunction);
+        OneInputTransformation<FileChunk, FileChunk> transform = (OneInputTransformation<FileChunk, FileChunk>) window.getTransformation();
+        OneInputStreamOperator<FileChunk, FileChunk> operator = transform.getOperator();
+        WindowOperator<String, FileChunk, FileChunk, FileChunk, TimeWindow> winOperator = (WindowOperator<String, FileChunk, FileChunk, FileChunk, TimeWindow>) operator;
+        testHarness = new KeyedOneInputStreamOperatorTestHarness<>(winOperator, winOperator.getKeySelector(), BasicTypeInfo.STRING_TYPE_INFO);
     }
 
     @Test
     public void testParseMessagePackMapFunction() throws Exception {
-        OneInputStreamOperatorTestHarness<byte[], FileChunk> testHarness = new OneInputStreamOperatorTestHarness<>(new StreamMap<>(new ParseMessagePackMapFunction()));
+        ParseMessagePackMapFunction mapFunction = new ParseMessagePackMapFunction(false, Long.MAX_VALUE);
+        OneInputStreamOperatorTestHarness<byte[], FileChunk> testHarness = new OneInputStreamOperatorTestHarness<>(new StreamMap<>(mapFunction));
         testHarness.setup();
         testHarness.open();
         for (byte[] messagePack : messagePackList) {
             testHarness.processElement(new StreamRecord<>(messagePack));
         }
-        ConcurrentLinkedQueue<Object> output = testHarness.getOutput();
-        Assert.assertEquals(30, output.size());
-        for (Object o : output) {
-            FileChunk fileChunk = ((StreamRecord<FileChunk>) o).getValue();
-            Assert.assertNotEquals("解析MessagePack数据失败", null, fileChunk.getUuid());
+        ConcurrentLinkedQueue<Object> expectedOutput = new ConcurrentLinkedQueue<>();
+        for (FileChunk fileChunk : inputFileChunks) {
+            expectedOutput.add(new StreamRecord<>(fileChunk));
         }
+        ConcurrentLinkedQueue<Object> actualOutput = testHarness.getOutput();
+        Assert.assertEquals(30, actualOutput.size());
+        TestHarnessUtil.assertOutputEqualsSorted("Output was not correct.", expectedOutput, actualOutput, (o1, o2) -> {
+            StreamRecord sr0 = (StreamRecord) o1;
+            StreamRecord sr1 = (StreamRecord) o2;
+            return ((FileChunk) sr0.getValue()).getUuid().compareTo(((FileChunk) sr1.getValue()).getUuid());
+        });
+        Assert.assertEquals(30, mapFunction.parseMessagePackCounter.getCount());
+        Assert.assertEquals(0, mapFunction.parseMessagePackErrorCounter.getCount());
+        Assert.assertEquals(0, mapFunction.rateLimitDropCounter.getCount());
+        testHarness.close();
     }
 
     @Test
     public void testFileChunkFilterFunction() throws Exception {
-        StreamFilter<FileChunk> fileChunkStreamFilter = new StreamFilter<>(new FileChunkFilterFunction(100000, "FileChunk.fileType == \"eml\""));
+        FileChunkFilterFunction fileChunkFilterFunction = new FileChunkFilterFunction(Long.MAX_VALUE, "FileChunk.fileType == \"eml\"");
+        StreamFilter<FileChunk> fileChunkStreamFilter = new StreamFilter<>(fileChunkFilterFunction);
         OneInputStreamOperatorTestHarness<FileChunk, FileChunk> testHarness = new OneInputStreamOperatorTestHarness<>(fileChunkStreamFilter);
         testHarness.setup();
         testHarness.open();
@@ -153,83 +167,120 @@ public class FileChunkCombinerTests {
             public int compare(Object o1, Object o2) {
                 StreamRecord sr0 = (StreamRecord) o1;
                 StreamRecord sr1 = (StreamRecord) o2;
-                return Long.compare(((FileChunk) sr0.getValue()).getOffset(), ((FileChunk) sr1.getValue()).getOffset());
+                return ((FileChunk) sr0.getValue()).getUuid().compareTo(((FileChunk) sr1.getValue()).getUuid());
             }
         });
+        Assert.assertEquals(20, fileChunkFilterFunction.filterChunkCounter.getCount());
         testHarness.close();
     }
 
     @Test
     public void testCombineChunkProcessWindowFunction() throws Exception {
-        //seek模式
-        ListStateDescriptor listStateDescriptor = new ListStateDescriptor<FileChunk>("test-seek-window", new ListSerializer(new JavaSerializer()));
-        List<Trigger<Object, TimeWindow>> triggers = new ArrayList<>();
-        triggers.add(EventTimeTrigger.create());
-        triggers.add(LastChunkOrNoDataInTimeTrigger.of(1000));
-        Trigger<Object, TimeWindow> trigger = MultipleTrigger.of(triggers);
-        CombineChunkProcessWindowFunction processWindowFunction = new CombineChunkProcessWindowFunction(configuration);
-        WindowOperator<String, FileChunk, FileChunk, FileChunk, TimeWindow> operator = new WindowOperator<String, FileChunk, FileChunk, FileChunk, TimeWindow>(
-                TumblingEventTimeWindows.of(Time.seconds(3)),
-                new TimeWindow.Serializer(),
-                new FileChunkKeySelector(),
-                BasicTypeInfo.STRING_TYPE_INFO.createSerializer(new ExecutionConfig()),
-                listStateDescriptor,
-                new InternalIterableProcessWindowFunction(processWindowFunction),
-                trigger,
-                0L, null);
-        ConcurrentLinkedQueue<Object> expectedOutput = new ConcurrentLinkedQueue<>();
-        expectedOutput.add(new StreamRecord<>(PublicUtil.combine(inputFileChunks.subList(0, 10), maxChunkCount, duplicateChunkCounter, combineErrorCounter, seekChunkCounter, appendChunkCounter).get(0), 2999L));
-        KeyedOneInputStreamOperatorTestHarness<String, FileChunk, FileChunk> testHarness = new KeyedOneInputStreamOperatorTestHarness<>(operator, new FileChunkKeySelector(), BasicTypeInfo.STRING_TYPE_INFO);
-        testHarness.setup();
         testHarness.open();
-        for (FileChunk fileChunk : inputFileChunks.subList(0, 10)) {
-            testHarness.processElement(fileChunk, 1000L);
+        testHarness.setProcessingTime(0L);
+        testHarness.processWatermark(-9223372036854775808L);
+        for (FileChunk inputFileChunk : inputFileChunks) {
+            testHarness.processElement(new StreamRecord<>(inputFileChunk, inputFileChunk.getTimestamp() / 1000));
         }
-        Assert.assertEquals(10, processWindowFunction.seekChunkCounter.getCount());
-        Assert.assertEquals(0, processWindowFunction.combineErrorCounter.getCount());
-        ConcurrentLinkedQueue<Object> actualOutput = testHarness.getOutput();
-        Assert.assertEquals(1, actualOutput.size());
-        TestHarnessUtil.assertOutputEqualsSorted("Output was not correct.", expectedOutput, actualOutput, (o1, o2) -> {
-            StreamRecord sr0 = (StreamRecord) o1;
-            StreamRecord sr1 = (StreamRecord) o2;
-            return Long.compare(((FileChunk) sr0.getValue()).getOffset(), ((FileChunk) sr1.getValue()).getOffset());
-        });
+        testHarness.setProcessingTime(9223372036854775807L);
+        testHarness.processWatermark(9223372036854775807L);
         testHarness.close();
-        //append模式
-        triggers = new ArrayList<>();
-        triggers.add(EventTimeTrigger.create());
-        triggers.add(LastChunkOrNoDataInTimeTrigger.of(1000));
-        trigger = MultipleTrigger.of(triggers);
-        listStateDescriptor = new ListStateDescriptor<FileChunk>("test-append-window", new ListSerializer(new JavaSerializer()));
-        processWindowFunction = new CombineChunkProcessWindowFunction(configuration);
-        operator = new WindowOperator<String, FileChunk, FileChunk, FileChunk, TimeWindow>(
-                TumblingEventTimeWindows.of(Time.seconds(3)),
-                new TimeWindow.Serializer(),
-                new FileChunkKeySelector(),
-                BasicTypeInfo.STRING_TYPE_INFO.createSerializer(new ExecutionConfig()),
-                listStateDescriptor,
-                new InternalIterableProcessWindowFunction(processWindowFunction),
-                trigger,
-                0L, null);
-        expectedOutput = new ConcurrentLinkedQueue<>();
-        expectedOutput.add(new StreamRecord<>(PublicUtil.combine(inputFileChunks.subList(10, 20), maxChunkCount, duplicateChunkCounter, combineErrorCounter, seekChunkCounter, appendChunkCounter).get(0), 2999L));
-        expectedOutput.add(new StreamRecord<>(PublicUtil.combine(inputFileChunks.subList(20, inputFileChunks.size()), maxChunkCount, duplicateChunkCounter, combineErrorCounter, seekChunkCounter, appendChunkCounter).get(0), 2999L));
-        testHarness = new KeyedOneInputStreamOperatorTestHarness<>(operator, new FileChunkKeySelector(), BasicTypeInfo.STRING_TYPE_INFO);
-        testHarness.setup();
+        List<Object> expectedOutput = new ArrayList<>(inputFiles);
+        List<Object> actualOutput = new ArrayList<>(testHarness.extractOutputValues());
+        Assert.assertEquals(3, actualOutput.size());
+        TestHarnessUtil.assertOutputEqualsSorted("Output was not correct.", expectedOutput, actualOutput, Comparator.comparing(o -> ((FileChunk) o).getUuid()));
+        Assert.assertEquals(0, processWindowFunction.combineErrorCounter.getCount());
+        Assert.assertEquals(0, processWindowFunction.duplicateChunkCounter.getCount());
+        testHarness.close();
+    }
+
+    @Test
+    public void testCombineChunkProcessWindowFunctionByOutputTag() throws Exception {
         testHarness.open();
-        for (FileChunk fileChunk : inputFileChunks.subList(10, inputFileChunks.size())) {
-            testHarness.processElement(fileChunk, 1000L);
+        categorizeChunks(inputFileChunks);
+        long timestamp = 0L;
+        for (FileChunk fileChunk : emlFileChunks) {
+            testHarness.processElement(fileChunk, timestamp += 10);
+        }
+        for (FileChunk fileChunk : pcapngFileChunks) {
+            testHarness.processElement(fileChunk, timestamp += 10);
+        }
+        testHarness.processWatermark(3000L);
+        for (FileChunk fileChunk : pcapngIncludeMetaFileChunks) {
+            testHarness.processElement(fileChunk, timestamp += 10);
+        }
+        List<Object> expectedOutput = new ArrayList<>();
+        expectedOutput.add(inputFiles.get(0));
+        expectedOutput.add(inputFiles.get(1));
+        List<Object> actualOutput = new ArrayList<>(testHarness.extractOutputValues());
+        Assert.assertEquals(2, actualOutput.size());
+        TestHarnessUtil.assertOutputEqualsSorted("Output was not correct.", expectedOutput, actualOutput, Comparator.comparing(o -> ((FileChunk) o).getUuid()));
+        ConcurrentLinkedQueue<StreamRecord<FileChunk>> sideOutput = testHarness.getSideOutput(delayedChunkOutputTag);
+        List<Object> expectedSideOutput = new ArrayList<>(pcapngIncludeMetaFileChunks);
+        List<Object> actualSideOutput = new ArrayList<>();
+        for (StreamRecord<FileChunk> streamRecord : sideOutput) {
+            actualSideOutput.add(streamRecord.getValue());
+        }
+        Assert.assertEquals(10, sideOutput.size());
+        TestHarnessUtil.assertOutputEqualsSorted("Output was not correct.", expectedSideOutput, actualSideOutput, Comparator.comparing(o -> ((FileChunk) o).getUuid()));
+        Assert.assertEquals(0, processWindowFunction.combineErrorCounter.getCount());
+        Assert.assertEquals(0, processWindowFunction.duplicateChunkCounter.getCount());
+        testHarness.close();
+    }
+
+    @Test
+    public void testCombineChunkProcessWindowFunctionByDuplicateChunk() throws Exception {
+        testHarness.open();
+        categorizeChunks(inputFileChunks);
+        pcapngFileChunks.add(pcapngFileChunks.get(5));
+        pcapngIncludeMetaFileChunks.add(pcapngIncludeMetaFileChunks.get(5));
+        long timestamp = 0L;
+        testHarness.processElement(emlFileChunks.get(5), timestamp + 100);
+        for (FileChunk fileChunk : emlFileChunks) {
+            testHarness.processElement(fileChunk, timestamp += 10);
+        }
+        for (FileChunk fileChunk : pcapngFileChunks) {
+            testHarness.processElement(fileChunk, timestamp += 10);
+        }
+        for (FileChunk fileChunk : pcapngIncludeMetaFileChunks) {
+            testHarness.processElement(fileChunk, timestamp += 10);
         }
         testHarness.setProcessingTime(5000L);
-        Assert.assertEquals(20, processWindowFunction.appendChunkCounter.getCount());
+        List<FileChunk> actualOutput = testHarness.extractOutputValues();
+        Assert.assertEquals(3, actualOutput.size());
+        Assert.assertEquals(inputFiles.get(0), actualOutput.get(0));
+        Assert.assertEquals(inputFiles.get(1).getChunk().length + pcapngFileChunks.get(5).getChunk().length, actualOutput.get(1).getChunk().length);
+        Assert.assertEquals(inputFiles.get(2).getChunk().length + pcapngIncludeMetaFileChunks.get(5).getChunk().length, actualOutput.get(2).getChunk().length);
         Assert.assertEquals(0, processWindowFunction.combineErrorCounter.getCount());
-        actualOutput = testHarness.getOutput();
-        Assert.assertEquals(2, actualOutput.size());
-        TestHarnessUtil.assertOutputEqualsSorted("Output was not correct.", expectedOutput, actualOutput, (o1, o2) -> {
-            StreamRecord sr0 = (StreamRecord) o1;
-            StreamRecord sr1 = (StreamRecord) o2;
-            return ((FileChunk) sr0.getValue()).getUuid().compareTo(((FileChunk) sr1.getValue()).getUuid());
-        });
+        Assert.assertEquals(1, processWindowFunction.duplicateChunkCounter.getCount());
+        testHarness.close();
+    }
+
+    @Test
+    public void testCombineChunkProcessWindowFunctionByLostChunk() throws Exception {
+        testHarness.open();
+        categorizeChunks(inputFileChunks);
+        emlFileChunks.remove(emlFileChunks.get(5));
+        pcapngFileChunks.remove(pcapngFileChunks.get(5));
+        pcapngIncludeMetaFileChunks.remove(pcapngIncludeMetaFileChunks.get(5));
+        long timestamp = 0L;
+        for (FileChunk fileChunk : emlFileChunks) {
+            testHarness.processElement(fileChunk, timestamp += 10);
+        }
+        for (FileChunk fileChunk : pcapngFileChunks) {
+            testHarness.processElement(fileChunk, timestamp += 10);
+        }
+        for (FileChunk fileChunk : pcapngIncludeMetaFileChunks) {
+            testHarness.processElement(fileChunk, timestamp += 10);
+        }
+        testHarness.setProcessingTime(5000L);
+        List<FileChunk> actualOutput = testHarness.extractOutputValues();
+        Assert.assertEquals(4, actualOutput.size());
+        Assert.assertEquals(inputFiles.get(0).getChunk().length - emlFileChunks.get(5).getChunk().length, actualOutput.get(0).getChunk().length + actualOutput.get(1).getChunk().length);
+        Assert.assertEquals(inputFiles.get(1).getChunk().length - pcapngFileChunks.get(5).getChunk().length, actualOutput.get(2).getChunk().length);
+        Assert.assertEquals(inputFiles.get(2).getChunk().length - pcapngIncludeMetaFileChunks.get(5).getChunk().length, actualOutput.get(3).getChunk().length);
+        Assert.assertEquals(0, processWindowFunction.combineErrorCounter.getCount());
+        Assert.assertEquals(0, processWindowFunction.duplicateChunkCounter.getCount());
         testHarness.close();
     }
 
@@ -244,20 +295,22 @@ public class FileChunkCombinerTests {
         testHarness.setup();
         testHarness.open();
         byte[] data = RandomUtil.randomString(1000).getBytes();
-        //seek模式
+        //seek文件
         FileChunk fileChunk = new FileChunk("0000000001", "eml", 0, data.length, data, "seek", 1, 5, System.currentTimeMillis());
         testHarness.processElement(new StreamRecord<>(fileChunk));
-        Assert.assertEquals("上传文件到hos错误", 0, hosSink.sendHosErrorCounter.getCount());
-        Assert.assertEquals("上传文件到hos失败", 1, hosSink.sendHosCounter.getCount());
+        Assert.assertEquals(1, hosSink.sendHosCounter.getCount());
+        Assert.assertEquals(0, hosSink.sendHosErrorCounter.getCount());
         Assert.assertEquals(1, hosSink.sendHosFileCounter.getCount());
         Assert.assertEquals(1, hosSink.sendHosChunkCounter.getCount());
-        //append模式
+        //append文件
         fileChunk = new FileChunk("0000000002", "pcapng", data.length, data, "append", 5, System.currentTimeMillis(), pcapngFileMeta, "1-200,2-200,3-200,4-200,5-200");
         testHarness.processElement(new StreamRecord<>(fileChunk));
-        Assert.assertEquals("上传文件到hos错误", 0, hosSink.sendHosErrorCounter.getCount());
-        Assert.assertEquals("上传文件到hos次数错误", 2, hosSink.sendHosCounter.getCount());
+        Assert.assertEquals(2, hosSink.sendHosCounter.getCount());
+        Assert.assertEquals(0, hosSink.sendHosErrorCounter.getCount());
+        Assert.assertEquals(1, hosSink.sendHosFileCounter.getCount());
         Assert.assertEquals(2, hosSink.sendHosChunkCounter.getCount());
         testHarness.close();
+
         //测试批量上传
         configuration.setString(Configs.SINK_TYPE, "hos");
         configuration.setBoolean(Configs.SINK_BATCH, true);
@@ -271,8 +324,8 @@ public class FileChunkCombinerTests {
         testHarness.processElement(new StreamRecord<>(fileChunk));
         fileChunk = new FileChunk("0000000002", "eml", 0, data.length, data, "seek", 1, 5, System.currentTimeMillis());
         testHarness.processElement(new StreamRecord<>(fileChunk));
-        Assert.assertEquals("上传文件到hos错误", 0, hosSink.sendHosErrorCounter.getCount());
-        Assert.assertEquals("上传文件到hos失败", 1, hosSink.sendHosCounter.getCount());
+        Assert.assertEquals(1, hosSink.sendHosCounter.getCount());
+        Assert.assertEquals(0, hosSink.sendHosErrorCounter.getCount());
         Assert.assertEquals(2, hosSink.sendHosFileCounter.getCount());
         Assert.assertEquals(2, hosSink.sendHosChunkCounter.getCount());
         testHarness.close();
@@ -298,92 +351,6 @@ public class FileChunkCombinerTests {
         Assert.assertEquals(2, hBaseSink.sendHBaseFileCounter.getCount());
         Assert.assertEquals(2, hBaseSink.sendHBaseChunkCounter.getCount());
         testHarness.close();
-    }
-
-    @Test
-    public void testCombineFullChunk() {
-        categorizeChunks(inputFileChunks);
-        //测试seek合并模式
-        List<FileChunk> fileChunkList = PublicUtil.combine(emlFileChunks, maxChunkCount, duplicateChunkCounter, combineErrorCounter, seekChunkCounter, appendChunkCounter);
-        Assert.assertEquals("seek模式合并错误", 1, fileChunkList.size());
-        Assert.assertEquals("seek模式合并错误，lastChunkFlag错误", 1, fileChunkList.get(0).getLastChunkFlag());
-        Assert.assertEquals("seek模式合并错误，chunkCount错误", emlChunkCount - 1, fileChunkList.get(0).getChunkCount());
-        Assert.assertEquals("seek模式合并错误，文件长度错误", emlFileBytes.length, fileChunkList.get(0).getChunk().length);
-        Assert.assertEquals("seek模式合并错误，文件内容错误", new String(emlFileBytes), new String(fileChunkList.get(0).getChunk()));
-        //测试append合并模式
-        fileChunkList = PublicUtil.combine(pcapngFileChunks, maxChunkCount, duplicateChunkCounter, combineErrorCounter, seekChunkCounter, appendChunkCounter);
-        Assert.assertEquals("append模式合并错误", 1, fileChunkList.size());
-        Assert.assertEquals("append模式合并错误，chunkCount错误", pcapngChunkCount, fileChunkList.get(0).getChunkCount());
-        Assert.assertEquals("append模式合并错误，文件长度错误", pcapngFileBytes.length, fileChunkList.get(0).getChunk().length);
-        Assert.assertEquals("append模式合并错误，文件内容错误", new String(pcapngFileBytes), new String(fileChunkList.get(0).getChunk()));
-        //测试合并携带元信息
-        fileChunkList = PublicUtil.combine(pcapngIncludeMetaFileChunks, maxChunkCount, duplicateChunkCounter, combineErrorCounter, seekChunkCounter, appendChunkCounter);
-        Assert.assertEquals(1, fileChunkList.size());
-        Assert.assertEquals("合并错误，元信息错误", pcapngFileMeta, fileChunkList.get(0).getMeta());
-
-        Assert.assertEquals("监控指标错误", 0, duplicateChunkCounter.getCount());
-        Assert.assertEquals("监控指标错误", 0, combineErrorCounter.getCount());
-        Assert.assertEquals("监控指标错误", emlChunkCount, seekChunkCounter.getCount());
-        Assert.assertEquals("监控指标错误", pcapngChunkCount * 2, appendChunkCounter.getCount());
-    }
-
-    @Test
-    public void testCombineDuplicateChunk() {
-        categorizeChunks(inputFileChunks);
-        //测试seek合并模式
-        emlFileChunks.add(emlFileChunks.get(5));
-        List<FileChunk> fileChunkList = PublicUtil.combine(emlFileChunks, maxChunkCount, duplicateChunkCounter, combineErrorCounter, seekChunkCounter, appendChunkCounter);
-        Assert.assertEquals("seek模式合并错误", 1, fileChunkList.size());
-        Assert.assertEquals("seek模式合并错误，lastChunkFlag错误", 1, fileChunkList.get(0).getLastChunkFlag());
-        Assert.assertEquals("seek模式合并错误，chunkCount错误", emlChunkCount - 1, fileChunkList.get(0).getChunkCount());
-        Assert.assertEquals("seek模式合并错误，文件长度错误", emlFileBytes.length, fileChunkList.get(0).getChunk().length);
-        Assert.assertEquals("seek模式合并错误，文件内容错误", new String(emlFileBytes), new String(fileChunkList.get(0).getChunk()));
-        //测试append合并模式
-        pcapngFileChunks.add(pcapngFileChunks.get(5));
-        fileChunkList = PublicUtil.combine(pcapngFileChunks, maxChunkCount, duplicateChunkCounter, combineErrorCounter, seekChunkCounter, appendChunkCounter);
-        Assert.assertEquals("append模式合并错误", 1, fileChunkList.size());
-        Assert.assertEquals("append模式合并错误，chunkCount错误", pcapngChunkCount + 1, fileChunkList.get(0).getChunkCount());
-        Assert.assertEquals("append模式合并错误，文件长度错误", pcapngFileBytes.length + pcapChunkData.length(), fileChunkList.get(0).getChunk().length);
-        Assert.assertEquals("append模式合并错误，文件内容错误", new String(pcapngFileBytes) + pcapChunkData, new String(fileChunkList.get(0).getChunk()));
-        //测试合并携带元信息
-        pcapngIncludeMetaFileChunks.add(pcapngIncludeMetaFileChunks.get(5));
-        fileChunkList = PublicUtil.combine(pcapngIncludeMetaFileChunks, maxChunkCount, duplicateChunkCounter, combineErrorCounter, seekChunkCounter, appendChunkCounter);
-        Assert.assertEquals(1, fileChunkList.size());
-        Assert.assertEquals("合并错误，元信息错误", pcapngFileMeta, fileChunkList.get(0).getMeta());
-
-        Assert.assertEquals("监控指标错误", 1, duplicateChunkCounter.getCount());
-        Assert.assertEquals("监控指标错误", 0, combineErrorCounter.getCount());
-        Assert.assertEquals("监控指标错误", emlChunkCount + 1, seekChunkCounter.getCount());
-        Assert.assertEquals("监控指标错误", pcapngChunkCount * 2 + 2, appendChunkCounter.getCount());
-    }
-
-    @Test
-    public void testCombineLostChunk() {
-        categorizeChunks(inputFileChunks);
-        //测试seek合并模式
-        emlFileChunks.remove(emlFileChunks.get(5));
-        List<FileChunk> fileChunkList = PublicUtil.combine(emlFileChunks, maxChunkCount, duplicateChunkCounter, combineErrorCounter, seekChunkCounter, appendChunkCounter);
-        Assert.assertEquals("seek模式合并错误", 2, fileChunkList.size());
-        Assert.assertEquals("seek模式合并错误，lastChunkFlag错误", 1, fileChunkList.get(1).getLastChunkFlag());
-        Assert.assertEquals("append模式合并错误，chunkCount错误", emlChunkCount - 2, fileChunkList.get(0).getChunkCount() + fileChunkList.get(1).getChunkCount());
-        Assert.assertEquals("seek模式合并错误，文件长度错误", emlFileBytes.length - 2000, fileChunkList.get(0).getLength() + fileChunkList.get(1).getLength());
-        //测试append合并模式
-        pcapngFileChunks.remove(pcapngFileChunks.get(5));
-        fileChunkList = PublicUtil.combine(pcapngFileChunks, maxChunkCount, duplicateChunkCounter, combineErrorCounter, seekChunkCounter, appendChunkCounter);
-        Assert.assertEquals("append模式合并错误", 1, fileChunkList.size());
-        Assert.assertEquals("append模式合并错误，chunkCount错误", pcapngChunkCount - 1, fileChunkList.get(0).getChunkCount());
-        Assert.assertEquals("append模式合并错误，文件长度错误", pcapngFileBytes.length - pcapChunkData.length(), fileChunkList.get(0).getChunk().length);
-        Assert.assertEquals("append模式合并错误，文件内容错误", new String(ArrayUtil.sub(pcapngFileBytes, 0, pcapngFileBytes.length - pcapChunkData.length())), new String(fileChunkList.get(0).getChunk()));
-        //测试合并携带元信息
-        pcapngIncludeMetaFileChunks.remove(pcapngIncludeMetaFileChunks.get(5));
-        fileChunkList = PublicUtil.combine(pcapngIncludeMetaFileChunks, maxChunkCount, duplicateChunkCounter, combineErrorCounter, seekChunkCounter, appendChunkCounter);
-        Assert.assertEquals(1, fileChunkList.size());
-        Assert.assertEquals("合并错误，元信息错误", pcapngFileMeta, fileChunkList.get(0).getMeta());
-
-        Assert.assertEquals("监控指标错误", 0, duplicateChunkCounter.getCount());
-        Assert.assertEquals("监控指标错误", 0, combineErrorCounter.getCount());
-        Assert.assertEquals("监控指标错误", emlChunkCount - 1, seekChunkCounter.getCount());
-        Assert.assertEquals("监控指标错误", pcapngChunkCount * 2 - 2, appendChunkCounter.getCount());
     }
 
     @Test
@@ -650,26 +617,68 @@ public class FileChunkCombinerTests {
         triggers.add(LastChunkOrNoDataInTimeTrigger.of(windowIdleTime * 1000));
         Trigger<Object, TimeWindow> trigger = MultipleTrigger.of(triggers);
         env.addSource(source)
-                .map(new ParseMessagePackMapFunction())
-                .filter((FilterFunction<FileChunk>) Objects::nonNull)
+                .map(new ParseMessagePackMapFunction(false, Long.MAX_VALUE))
+                .filter(new FileChunkFilterFunction(Long.MAX_VALUE, ""))
                 .assignTimestampsAndWatermarks(watermarkStrategy)
-                .keyBy(new FileChunkKeySelector())
+                .keyBy(new FileChunkKeySelector(), BasicTypeInfo.STRING_TYPE_INFO)
                 .window(TumblingEventTimeWindows.of(Time.seconds(windowTime)))
                 .trigger(trigger)
-                .process(new CombineChunkProcessWindowFunction(configuration))
+                .process(new CombineChunkProcessWindowFunction(Integer.MAX_VALUE))
                 .addSink(new CollectSink());
         return env;
     }
 
     private void categorizeChunks(List<FileChunk> fileChunks) {
         for (FileChunk fileChunk : fileChunks) {
-            if (emlUuid.equals(fileChunk.getUuid())) {
+            if ("eml".equals(fileChunk.getFileType())) {
                 emlFileChunks.add(fileChunk);
-            } else if (pcapngUuid.equals(fileChunk.getUuid())) {
+            } else if ("pcapng".equals(fileChunk.getFileType()) && fileChunk.getMeta() == null) {
                 pcapngFileChunks.add(fileChunk);
-            } else if (pcapngIncludeMetaUuid.equals(fileChunk.getUuid())) {
+            } else if ("pcapng".equals(fileChunk.getFileType()) && fileChunk.getMeta() != null) {
                 pcapngIncludeMetaFileChunks.add(fileChunk);
             }
         }
     }
+
+//    @Test
+//    public void testCombineChunkProcessWindowFunction() throws Exception {
+//        List<Trigger<Object, TimeWindow>> triggers = new ArrayList<>();
+//        triggers.add(EventTimeTrigger.create());
+//        triggers.add(LastChunkOrNoDataInTimeTrigger.of(1000));
+//        Trigger<Object, TimeWindow> trigger = MultipleTrigger.of(triggers);
+//        TypeSerializer<FileChunk> serializer = TypeInformation.of(FileChunk.class).createSerializer(new ExecutionConfig());
+//        ListStateDescriptor listStateDescriptor = new ListStateDescriptor<>("test-seek-window", serializer);
+//        CombineChunkProcessWindowFunction processWindowFunction = new CombineChunkProcessWindowFunction(Integer.MAX_VALUE);
+//        WindowOperator<String, FileChunk, FileChunk, FileChunk, TimeWindow> operator = new WindowOperator<String, FileChunk, FileChunk, FileChunk, TimeWindow>(
+//                TumblingEventTimeWindows.of(Time.seconds(3)),
+//                new TimeWindow.Serializer(),
+//                new FileChunkKeySelector(),
+//                BasicTypeInfo.STRING_TYPE_INFO.createSerializer(new ExecutionConfig()),
+//                listStateDescriptor,
+//                new InternalIterableProcessWindowFunction(processWindowFunction),
+//                trigger,
+//                0L, null);
+//        KeyedOneInputStreamOperatorTestHarness<String, FileChunk, FileChunk> testHarness = new KeyedOneInputStreamOperatorTestHarness<>(operator, new FileChunkKeySelector(), BasicTypeInfo.STRING_TYPE_INFO);
+//        testHarness.setup();
+//        testHarness.open();
+//        ConcurrentLinkedQueue<Object> expectedOutput = new ConcurrentLinkedQueue<>();
+//        for (FileChunk file : inputFiles) {
+//            expectedOutput.add(new StreamRecord<>(file, 2999L));
+//        }
+//        long timestamp = 0L;
+//        for (FileChunk fileChunk : inputFileChunks) {
+//            testHarness.processElement(fileChunk, timestamp += 10);
+//        }
+//        testHarness.setProcessingTime(5000L);
+//        ConcurrentLinkedQueue<Object> actualOutput = testHarness.getOutput();
+//        Assert.assertEquals(3, actualOutput.size());
+//        TestHarnessUtil.assertOutputEqualsSorted("Output was not correct.", expectedOutput, actualOutput, (o1, o2) -> {
+//            StreamRecord sr0 = (StreamRecord) o1;
+//            StreamRecord sr1 = (StreamRecord) o2;
+//            return ((FileChunk) sr0.getValue()).getUuid().compareTo(((FileChunk) sr1.getValue()).getUuid());
+//        });
+//        Assert.assertEquals(0, processWindowFunction.combineErrorCounter.getCount());
+//        Assert.assertEquals(0, processWindowFunction.duplicateChunkCounter.getCount());
+//        testHarness.close();
+//    }
 }

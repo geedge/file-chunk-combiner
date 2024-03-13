@@ -40,12 +40,12 @@ public class FileChunkCombiner {
         SingleOutputStreamOperator<FileChunk> parseMessagePackStream = environment
                 .addSource(KafkaConsumer.byteArrayConsumer(configuration))
                 .name("Kafka Source")
-                .map(new ParseMessagePackMapFunction())
+                .map(new ParseMessagePackMapFunction(configuration.get(Configs.MAP_ENABLE_RATE_LIMIT), configuration.get(Configs.MAP_RATE_LIMIT_THRESHOLD)))
                 .name("Map: Parse Message Pack")
                 .filter(new FileChunkFilterFunction(configuration.getLong(Configs.FILE_MAX_SIZE), configuration.getString(Configs.FILTER_EXPRESSION)))
                 .assignTimestampsAndWatermarks(watermarkStrategy);
 
-        OutputTag<FileChunk> delayedChunkOutputTag = new OutputTag<FileChunk>("delayed-chunk") {
+        OutputTag<FileChunk> delayedChunkOutputTag = new OutputTag<>("delayed-chunk") {
         };
 
         List<Trigger<Object, TimeWindow>> triggers = new ArrayList<>();
@@ -57,7 +57,7 @@ public class FileChunkCombiner {
                 .window(TumblingEventTimeWindows.of(Time.seconds(configuration.get(Configs.COMBINER_WINDOW_TIME))))
                 .trigger(trigger)
                 .sideOutputLateData(delayedChunkOutputTag)
-                .process(new CombineChunkProcessWindowFunction(configuration))
+                .process(new CombineChunkProcessWindowFunction(configuration.get(Configs.FILE_MAX_CHUNK_COUNT)))
                 .name("Window: Combine Chunk")
                 .setParallelism(configuration.get(Configs.COMBINER_WINDOW_PARALLELISM))
                 .disableChaining();

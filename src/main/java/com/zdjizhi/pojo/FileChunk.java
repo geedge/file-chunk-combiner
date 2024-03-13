@@ -167,16 +167,19 @@ public class FileChunk implements Serializable {
                 length == fileChunk.length &&
                 lastChunkFlag == fileChunk.lastChunkFlag &&
                 chunkCount == fileChunk.chunkCount &&
+                timestamp == fileChunk.timestamp &&
                 Objects.equals(uuid, fileChunk.uuid) &&
                 Objects.equals(fileName, fileChunk.fileName) &&
                 Objects.equals(fileType, fileChunk.fileType) &&
                 Arrays.equals(chunk, fileChunk.chunk) &&
-                Objects.equals(combineMode, fileChunk.combineMode);
+                Objects.equals(combineMode, fileChunk.combineMode) &&
+                Objects.equals(meta, fileChunk.meta) &&
+                Objects.equals(chunkNumbers, fileChunk.chunkNumbers);
     }
 
     @Override
     public int hashCode() {
-        int result = Objects.hash(uuid, fileName, fileType, offset, length, combineMode, lastChunkFlag, chunkCount);
+        int result = Objects.hash(uuid, fileName, fileType, offset, length, combineMode, lastChunkFlag, chunkCount, timestamp, meta, chunkNumbers);
         result = 31 * result + Arrays.hashCode(chunk);
         return result;
     }

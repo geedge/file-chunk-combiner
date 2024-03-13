@@ -11,6 +11,7 @@ import com.zdjizhi.utils.PublicConstants;
 import com.zdjizhi.utils.PublicUtil;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.metrics.Counter;
+import org.apache.flink.metrics.MeterView;
 import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
 import org.apache.hadoop.hbase.TableName;
@@ -61,6 +62,10 @@ public class HBaseSink extends RichSinkFunction<FileChunk> {
         sendHBaseErrorCounter = metricGroup.counter("sendHBaseErrorCount");
         sendHBaseFileCounter = metricGroup.counter("sendHBaseFileCount");
         sendHBaseChunkCounter = metricGroup.counter("sendHBaseChunkCount");
+        metricGroup.meter("sendHBasePerSecond", new MeterView(sendHBaseCounter, 5));
+        metricGroup.meter("sendHBaseErrorPerSecond", new MeterView(sendHBaseErrorCounter));
+        metricGroup.meter("sendHBaseFilePerSecond", new MeterView(sendHBaseFileCounter));
+        metricGroup.meter("sendHBaseChunkPerSecond", new MeterView(sendHBaseChunkCounter));
         isAsync = configuration.getBoolean(Configs.SINK_ASYNC);
         if (isAsync) {
             AsyncHBaseConnection = HBaseConnectionUtil.getInstance(configuration).getAsyncHBaseConnection();

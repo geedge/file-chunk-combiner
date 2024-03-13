@@ -43,6 +43,13 @@ public class Configs {
             .stringType()
             .noDefaultValue();
 
+    public static final ConfigOption<Boolean> MAP_ENABLE_RATE_LIMIT = ConfigOptions.key("map.enable.rate.limit")
+            .booleanType()
+            .defaultValue(false);
+    public static final ConfigOption<Long> MAP_RATE_LIMIT_THRESHOLD = ConfigOptions.key("map.rate.limit.threshold")
+            .longType()
+            .defaultValue(Long.MAX_VALUE);
+
     public static final ConfigOption<Integer> COMBINER_WINDOW_PARALLELISM = ConfigOptions.key("combiner.window.parallelism")
             .intType()
             .defaultValue(1);

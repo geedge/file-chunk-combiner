@@ -6,12 +6,13 @@ import org.apache.commons.jexl3.*;
 import org.apache.flink.api.common.functions.RichFilterFunction;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.metrics.Counter;
+import org.apache.flink.metrics.MeterView;
 import org.apache.flink.metrics.MetricGroup;
 
 public class FileChunkFilterFunction extends RichFilterFunction<FileChunk> {
     private final long maxFileSize;
     private final String filterExpression;
-    private transient Counter filterChunkCounter;
+    public transient Counter filterChunkCounter;
     private JexlExpression jexlExpression;
     private JexlContext jexlContext;
 
@@ -25,6 +26,7 @@ public class FileChunkFilterFunction extends RichFilterFunction<FileChunk> {
         super.open(parameters);
         MetricGroup metricGroup = getRuntimeContext().getMetricGroup();
         filterChunkCounter = metricGroup.counter("filterChunkCount");
+        metricGroup.meter("filterChunkPerSecond", new MeterView(filterChunkCounter));
         JexlEngine jexlEngine = new JexlBuilder().create();
         jexlExpression = jexlEngine.createExpression(filterExpression);
         jexlContext = new MapContext();

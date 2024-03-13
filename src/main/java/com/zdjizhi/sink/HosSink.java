@@ -11,6 +11,7 @@ import com.zdjizhi.utils.PublicUtil;
 import org.apache.commons.lang.CharEncoding;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.metrics.Counter;
+import org.apache.flink.metrics.MeterView;
 import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.streaming.api.functions.sink.RichSinkFunction;
 import org.apache.http.HttpResponse;
@@ -69,6 +70,10 @@ public class HosSink extends RichSinkFunction<FileChunk> {
         sendHosErrorCounter = metricGroup.counter("sendHosErrorCount");
         sendHosFileCounter = metricGroup.counter("sendHosFileCount");
         sendHosChunkCounter = metricGroup.counter("sendHosChunkCount");
+        metricGroup.meter("sendHosPerSecond", new MeterView(sendHosCounter, 5));
+        metricGroup.meter("sendHosErrorPerSecond", new MeterView(sendHosErrorCounter));
+        metricGroup.meter("sendHosFilePerSecond", new MeterView(sendHosFileCounter));
+        metricGroup.meter("sendHosChunkPerSecond", new MeterView(sendHosChunkCounter));
         loadBalanceMode = configuration.getInteger(Configs.SINK_HOS_LOAD_BALANCE_MODE);
         if (loadBalanceMode == 0) {
             endpoint = configuration.getString(Configs.SINK_HOS_ENDPOINT);
