@@ -122,7 +122,7 @@ public class FileChunkCombinerTests {
 
     @Test
     public void testParseMessagePackMapFunction() throws Exception {
-        ParseMessagePackMapFunction mapFunction = new ParseMessagePackMapFunction(false, Long.MAX_VALUE);
+        ParseMessagePackMapFunction mapFunction = new ParseMessagePackMapFunction(false, Long.MAX_VALUE,"");
         OneInputStreamOperatorTestHarness<byte[], FileChunk> testHarness = new OneInputStreamOperatorTestHarness<>(new StreamMap<>(mapFunction));
         testHarness.setup();
         testHarness.open();
@@ -617,7 +617,7 @@ public class FileChunkCombinerTests {
         triggers.add(LastChunkOrNoDataInTimeTrigger.of(windowIdleTime * 1000));
         Trigger<Object, TimeWindow> trigger = MultipleTrigger.of(triggers);
         env.addSource(source)
-                .map(new ParseMessagePackMapFunction(false, Long.MAX_VALUE))
+                .map(new ParseMessagePackMapFunction(false, Long.MAX_VALUE,""))
                 .filter(new FileChunkFilterFunction(Long.MAX_VALUE, ""))
                 .assignTimestampsAndWatermarks(watermarkStrategy)
                 .keyBy(new FileChunkKeySelector(), BasicTypeInfo.STRING_TYPE_INFO)

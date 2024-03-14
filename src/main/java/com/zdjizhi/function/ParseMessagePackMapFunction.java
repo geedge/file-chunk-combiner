@@ -1,10 +1,12 @@
 package com.zdjizhi.function;
 
+import cn.hutool.core.util.StrUtil;
 import cn.hutool.json.JSONObject;
 import cn.hutool.json.JSONUtil;
 import cn.hutool.log.Log;
 import cn.hutool.log.LogFactory;
 import com.zdjizhi.pojo.FileChunk;
+import org.apache.commons.jexl3.*;
 import org.apache.flink.api.common.functions.RichMapFunction;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.metrics.*;
@@ -18,18 +20,21 @@ import static com.zdjizhi.utils.PublicConstants.COMBINE_MODE_APPEND;
 
 public class ParseMessagePackMapFunction extends RichMapFunction<byte[], FileChunk> {
     private static final Log LOG = LogFactory.get();
-
+    private final boolean enableRateLimit;
+    private final long rateLimitThreshold;
+    private final String rateLimitExpression;
     public transient Counter parseMessagePackCounter;
     public transient Counter parseMessagePackErrorCounter;
     public transient Counter rateLimitDropCounter;
-    private final boolean enableRateLimit;
-    private final long rateLimitThreshold;
     private long timestamp;
     private long count;
+    private JexlExpression jexlExpression;
+    private JexlContext jexlContext;
 
-    public ParseMessagePackMapFunction(boolean enableRateLimit, long rateLimitThreshold) {
+    public ParseMessagePackMapFunction(boolean enableRateLimit, long rateLimitThreshold, String rateLimitExpression) {
         this.rateLimitThreshold = rateLimitThreshold;
         this.enableRateLimit = enableRateLimit;
+        this.rateLimitExpression = rateLimitExpression;
     }
 
     @Override
@@ -44,24 +49,37 @@ public class ParseMessagePackMapFunction extends RichMapFunction<byte[], FileChu
         metricGroup.meter("rateLimitDropPerSecond", new MeterView(rateLimitDropCounter));
         timestamp = System.currentTimeMillis();
         count = 0;
+        JexlEngine jexlEngine = new JexlBuilder().create();
+        jexlExpression = jexlEngine.createExpression(rateLimitExpression);
+        jexlContext = new MapContext();
     }
 
     @Override
     public FileChunk map(byte[] messagePackData) {
-        FileChunk fileChunk = null;
+        FileChunk fileChunk = parseMessagePack(messagePackData);
         if (enableRateLimit) {
             count++;
-            if (System.currentTimeMillis() - timestamp < 1000 && count <= rateLimitThreshold) {
-                fileChunk = parseMessagePack(messagePackData);
-            } else if (System.currentTimeMillis() - timestamp < 1000 && count > rateLimitThreshold) {
+            if (System.currentTimeMillis() - timestamp < 1000 && count > rateLimitThreshold) {
+                if (StrUtil.isNotEmpty(rateLimitExpression)) {
+                    jexlContext.set(fileChunk.getClass().getSimpleName(), fileChunk);
+                    if (Boolean.parseBoolean(jexlExpression.evaluate(jexlContext).toString())) {
+                        return fileChunk;
+                    }
+                }
                 rateLimitDropCounter.inc();
-            } else {
+                fileChunk = null;
+            } else if (System.currentTimeMillis() - timestamp >= 1000) {
+                if (StrUtil.isNotEmpty(rateLimitExpression)) {
+                    jexlContext.set(fileChunk.getClass().getSimpleName(), fileChunk);
+                    if (Boolean.parseBoolean(jexlExpression.evaluate(jexlContext).toString())) {
+                        return fileChunk;
+                    }
+                }
                 rateLimitDropCounter.inc();
+                fileChunk = null;
                 timestamp = System.currentTimeMillis();
                 count = 0;
             }
-        } else {
-            fileChunk = parseMessagePack(messagePackData);
         }
         return fileChunk;
     }

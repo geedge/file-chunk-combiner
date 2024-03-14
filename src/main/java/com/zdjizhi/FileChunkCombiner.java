@@ -40,7 +40,7 @@ public class FileChunkCombiner {
         SingleOutputStreamOperator<FileChunk> parseMessagePackStream = environment
                 .addSource(KafkaConsumer.byteArrayConsumer(configuration))
                 .name("Kafka Source")
-                .map(new ParseMessagePackMapFunction(configuration.get(Configs.MAP_ENABLE_RATE_LIMIT), configuration.get(Configs.MAP_RATE_LIMIT_THRESHOLD)))
+                .map(new ParseMessagePackMapFunction(configuration.get(Configs.ENABLE_RATE_LIMIT), configuration.get(Configs.RATE_LIMIT_THRESHOLD), configuration.get(Configs.RATE_LIMIT_EXCLUSION_EXPRESSION)))
                 .name("Map: Parse Message Pack")
                 .filter(new FileChunkFilterFunction(configuration.getLong(Configs.FILE_MAX_SIZE), configuration.getString(Configs.FILTER_EXPRESSION)))
                 .assignTimestampsAndWatermarks(watermarkStrategy);
