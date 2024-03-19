@@ -11,19 +11,19 @@ import static com.zdjizhi.utils.PublicConstants.COMBINE_MODE_APPEND;
 
 public class SideOutputMapFunction extends RichMapFunction<FileChunk, FileChunk> {
 
-    private transient Counter delayedChunkCounter;
+    public transient Counter delayedChunksCounter;
 
     @Override
     public void open(Configuration parameters) throws Exception {
         super.open(parameters);
         MetricGroup metricGroup = getRuntimeContext().getMetricGroup();
-        delayedChunkCounter = metricGroup.counter("delayedChunkCount");
-        metricGroup.meter("delayedChunkPerSecond", new MeterView(delayedChunkCounter));
+        delayedChunksCounter = metricGroup.counter("delayedChunksCount");
+        metricGroup.meter("numChunksDelayPerSecond", new MeterView(delayedChunksCounter));
     }
 
     @Override
     public FileChunk map(FileChunk fileChunk) {
-        delayedChunkCounter.inc();
+        delayedChunksCounter.inc();
         fileChunk.setChunkCount(1);
         if (COMBINE_MODE_APPEND.equals(fileChunk.getCombineMode())) {
             fileChunk.setChunkNumbers(fileChunk.getTimestamp() + "-" + fileChunk.getChunk().length + ";");

@@ -36,10 +36,16 @@ public class HosSink extends RichSinkFunction<FileChunk> {
     private static final Log LOG = LogFactory.get();
 
     private final Configuration configuration;
-    public transient Counter sendHosCounter;
-    public transient Counter sendHosErrorCounter;
-    public transient Counter sendHosFileCounter;
-    public transient Counter sendHosChunkCounter;
+    public transient Counter sinkRequestsCounter;
+    public transient Counter sinkErrorRequestsCounter;
+    public transient Counter sinkFilesCounter;
+    public transient Counter sinkChunksCounter;
+    public transient Counter lessThan5KBChunksCounter;
+    public transient Counter between5KBAnd10KBChunksCounter;
+    public transient Counter between10KBAnd50KBChunksCounter;
+    public transient Counter between50KBAnd100KBChunksCounter;
+    public transient Counter between100KBAnd1MBChunksCounter;
+    public transient Counter greaterThan1MBChunksCounter;
     private boolean isAsync;
     private CloseableHttpClient syncHttpClient;
     private CloseableHttpAsyncClient asyncHttpClient;
@@ -66,14 +72,27 @@ public class HosSink extends RichSinkFunction<FileChunk> {
     public void open(Configuration parameters) throws Exception {
         super.open(parameters);
         MetricGroup metricGroup = getRuntimeContext().getMetricGroup();
-        sendHosCounter = metricGroup.counter("sendHosCount");
-        sendHosErrorCounter = metricGroup.counter("sendHosErrorCount");
-        sendHosFileCounter = metricGroup.counter("sendHosFileCount");
-        sendHosChunkCounter = metricGroup.counter("sendHosChunkCount");
-        metricGroup.meter("sendHosPerSecond", new MeterView(sendHosCounter, 5));
-        metricGroup.meter("sendHosErrorPerSecond", new MeterView(sendHosErrorCounter));
-        metricGroup.meter("sendHosFilePerSecond", new MeterView(sendHosFileCounter));
-        metricGroup.meter("sendHosChunkPerSecond", new MeterView(sendHosChunkCounter));
+        lessThan5KBChunksCounter = metricGroup.counter("lessThan5KBChunksCount");
+        between5KBAnd10KBChunksCounter = metricGroup.counter("between5KBAnd10KBChunksCount");
+        between10KBAnd50KBChunksCounter = metricGroup.counter("between10KBAnd50KBChunksCount");
+        between50KBAnd100KBChunksCounter = metricGroup.counter("between50KBAnd100KBChunksCount");
+        between100KBAnd1MBChunksCounter = metricGroup.counter("between100KBAnd1MBChunksCount");
+        greaterThan1MBChunksCounter = metricGroup.counter("greaterThan1MBChunksCount");
+        metricGroup.meter("numLessThan5KBChunksOutPerSecond", new MeterView(lessThan5KBChunksCounter));
+        metricGroup.meter("numBetween5KBAnd10KBChunksOutPerSecond", new MeterView(between5KBAnd10KBChunksCounter));
+        metricGroup.meter("numBetween10KBAnd50KBChunksOutPerSecond", new MeterView(between10KBAnd50KBChunksCounter));
+        metricGroup.meter("numBetween50KBAnd100KBChunkPsOuterSecond", new MeterView(between50KBAnd100KBChunksCounter));
+        metricGroup.meter("numBetween100KBAnd1MBChunksOutPerSecond", new MeterView(between100KBAnd1MBChunksCounter));
+        metricGroup.meter("numGreaterThan1MBChunksOutPerSecond", new MeterView(greaterThan1MBChunksCounter));
+        sinkRequestsCounter = metricGroup.counter("sinkRequestsCount");
+        sinkErrorRequestsCounter = metricGroup.counter("sinkErrorRequestsCount");
+        sinkFilesCounter = metricGroup.counter("sinkFilesCount");
+        sinkChunksCounter = metricGroup.counter("sinkChunksCount");
+        metricGroup.meter("numRequestsSinkPerSecond", new MeterView(sinkRequestsCounter, 5));
+        metricGroup.meter("numErrorRequestsSinkPerSecond", new MeterView(sinkErrorRequestsCounter));
+        metricGroup.meter("numFilesSinkPerSecond", new MeterView(sinkFilesCounter));
+        metricGroup.meter("numChunksSinkPerSecond", new MeterView(sinkChunksCounter));
+
         loadBalanceMode = configuration.getInteger(Configs.SINK_HOS_LOAD_BALANCE_MODE);
         if (loadBalanceMode == 0) {
             endpoint = configuration.getString(Configs.SINK_HOS_ENDPOINT);
@@ -106,7 +125,8 @@ public class HosSink extends RichSinkFunction<FileChunk> {
         if (fileChunk.getChunk() != null) {
             data = fileChunk.getChunk();
         }
-        sendHosChunkCounter.inc();
+        long chunkLength = data.length;
+        sinkChunksCounter.inc();
         if (configuration.get(Configs.SINK_BATCH)) {
             hosMessage.put(HOS_META_FILE_TYPE, fileChunk.getFileType());
             hosMessage.put(HOS_META_FILENAME, fileChunk.getUuid());
@@ -114,7 +134,7 @@ public class HosSink extends RichSinkFunction<FileChunk> {
                 hosMessage.put(HOS_OFFSET, fileChunk.getOffset() + "");
                 hosMessage.put(HOS_PART_LAST_FLAG, fileChunk.getLastChunkFlag() + "");
                 if (fileChunk.getOffset() == 0) {
-                    sendHosFileCounter.inc();
+                    sinkFilesCounter.inc();
                 }
             } else {
                 hosMessage.put(HOS_PART_NUMBER, fileChunk.getTimestamp() + "");
@@ -129,10 +149,11 @@ public class HosSink extends RichSinkFunction<FileChunk> {
             }
             objectsMeta += hosMessage.toString() + ";";
             hosMessage.clear();
-            objectsOffset += data.length + ";";
+            objectsOffset += chunkLength + ";";
             byteList.add(data);
             chunkCount++;
-            chunkSize += data.length;
+            chunkSize += chunkLength;
+            calculateChunkSize(chunkLength);
             if (chunkSize >= maxBatchSize || chunkCount >= maxBatchCount) {
                 HttpPut httpPut = new HttpPut(bathPutUrl);
                 httpPut.setHeader(TOKEN, token);
@@ -170,7 +191,7 @@ public class HosSink extends RichSinkFunction<FileChunk> {
                 httpPut.setHeader(HOS_OFFSET, fileChunk.getOffset() + "");
                 httpPut.setHeader(HOS_PART_LAST_FLAG, fileChunk.getLastChunkFlag() + "");
                 if (fileChunk.getOffset() == 0) {
-                    sendHosFileCounter.inc();
+                    sinkFilesCounter.inc();
                 }
             } else {
                 httpPut.setHeader(HOS_PART_NUMBER, fileChunk.getTimestamp() + "");
@@ -184,6 +205,7 @@ public class HosSink extends RichSinkFunction<FileChunk> {
                 }
             }
             httpPut.setEntity(new ByteArrayEntity(data));
+            calculateChunkSize(chunkLength);
             executeRequest(httpPut);
         }
     }
@@ -195,7 +217,7 @@ public class HosSink extends RichSinkFunction<FileChunk> {
     }
 
     private void executeRequest(HttpPut httpPut) {
-        sendHosCounter.inc();
+        sinkRequestsCounter.inc();
         if (isAsync) {
             asyncHttpClient.execute(httpPut, new FutureCallback<HttpResponse>() {
                 @Override
@@ -204,18 +226,18 @@ public class HosSink extends RichSinkFunction<FileChunk> {
                         if (httpResponse.getStatusLine().getStatusCode() != 200) {
                             String responseEntity = EntityUtils.toString(httpResponse.getEntity(), CharEncoding.UTF_8);
                             LOG.error("put part to hos error. code: " + httpResponse.getStatusLine().getStatusCode() + ". message: " + responseEntity);
-                            sendHosErrorCounter.inc();
+                            sinkErrorRequestsCounter.inc();
                         }
                     } catch (IOException e) {
                         LOG.error("put part to hos error.", e);
-                        sendHosErrorCounter.inc();
+                        sinkErrorRequestsCounter.inc();
                     }
                 }
 
                 @Override
                 public void failed(Exception ex) {
                     LOG.error("put part to hos error.", ex);
-                    sendHosErrorCounter.inc();
+                    sinkErrorRequestsCounter.inc();
                     if (loadBalanceMode == 1 && ex instanceof ConnectException) {
                         endpoint = ipList.get(RandomUtil.randomInt(ipList.size())) + ":" + portList.get(RandomUtil.randomInt(portList.size()));
                         bathPutUrl = URLUtil.normalize(endpoint + "/hos/" + configuration.get(Configs.SINK_HOS_BUCKET) + "/" + PublicUtil.getUUID()) + "?multiFile";
@@ -234,17 +256,33 @@ public class HosSink extends RichSinkFunction<FileChunk> {
                 if (response.getStatusLine().getStatusCode() != 200) {
                     String responseEntity = EntityUtils.toString(response.getEntity(), CharEncoding.UTF_8);
                     LOG.error("put part to hos error. code: " + response.getStatusLine().getStatusCode() + ". message: " + responseEntity);
-                    sendHosErrorCounter.inc();
+                    sinkErrorRequestsCounter.inc();
                 }
             } catch (IOException e) {
                 LOG.error("put part to hos error.", e);
-                sendHosErrorCounter.inc();
+                sinkErrorRequestsCounter.inc();
                 if (loadBalanceMode == 1 && (e instanceof HttpHostConnectException || e instanceof ConnectTimeoutException)) {
                     endpoint = ipList.get(RandomUtil.randomInt(ipList.size())) + ":" + portList.get(RandomUtil.randomInt(portList.size()));
                 }
             } finally {
                 IoUtil.close(response);
             }
+        }
+    }
+
+    private void calculateChunkSize(long length) {
+        if (length <= 5 * 1024) {
+            lessThan5KBChunksCounter.inc();
+        } else if (length <= 10 * 1024) {
+            between5KBAnd10KBChunksCounter.inc();
+        } else if (length <= 50 * 1024) {
+            between10KBAnd50KBChunksCounter.inc();
+        } else if (length <= 100 * 1024) {
+            between50KBAnd100KBChunksCounter.inc();
+        } else if (length <= 1024 * 1024) {
+            between100KBAnd1MBChunksCounter.inc();
+        } else {
+            greaterThan1MBChunksCounter.inc();
         }
     }
 }

@@ -12,7 +12,7 @@ import org.apache.flink.metrics.MetricGroup;
 public class FileChunkFilterFunction extends RichFilterFunction<FileChunk> {
     private final long maxFileSize;
     private final String filterExpression;
-    public transient Counter filterChunkCounter;
+    public transient Counter filterChunksCounter;
     private JexlExpression jexlExpression;
     private JexlContext jexlContext;
 
@@ -25,8 +25,8 @@ public class FileChunkFilterFunction extends RichFilterFunction<FileChunk> {
     public void open(Configuration parameters) throws Exception {
         super.open(parameters);
         MetricGroup metricGroup = getRuntimeContext().getMetricGroup();
-        filterChunkCounter = metricGroup.counter("filterChunkCount");
-        metricGroup.meter("filterChunkPerSecond", new MeterView(filterChunkCounter));
+        filterChunksCounter = metricGroup.counter("filterChunksCount");
+        metricGroup.meter("numChunksFilterPerSecond", new MeterView(filterChunksCounter));
         JexlEngine jexlEngine = new JexlBuilder().create();
         jexlExpression = jexlEngine.createExpression(filterExpression);
         jexlContext = new MapContext();
@@ -35,13 +35,13 @@ public class FileChunkFilterFunction extends RichFilterFunction<FileChunk> {
     @Override
     public boolean filter(FileChunk value) {
         if (value == null || value.getOffset() > maxFileSize) {
-            filterChunkCounter.inc();
+            filterChunksCounter.inc();
             return false;
         }
         if (StrUtil.isNotEmpty(filterExpression)) {
             jexlContext.set(value.getClass().getSimpleName(), value);
             if (!Boolean.parseBoolean(jexlExpression.evaluate(jexlContext).toString())) {
-                filterChunkCounter.inc();
+                filterChunksCounter.inc();
                 return false;
             }
         }

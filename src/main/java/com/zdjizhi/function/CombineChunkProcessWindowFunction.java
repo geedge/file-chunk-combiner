@@ -22,8 +22,8 @@ import static com.zdjizhi.utils.PublicConstants.COMBINE_MODE_SEEK;
 public class CombineChunkProcessWindowFunction extends ProcessWindowFunction<FileChunk, FileChunk, String, TimeWindow> {
     private static final Log LOG = LogFactory.get();
 
-    public transient Counter duplicateChunkCounter;
-    public transient Counter combineErrorCounter;
+    public transient Counter duplicateChunksCounter;
+    public transient Counter combineErrorChunksCounter;
     private final int fileMaxChunkCount;
 
     public CombineChunkProcessWindowFunction(int fileMaxChunkCount) {
@@ -34,10 +34,10 @@ public class CombineChunkProcessWindowFunction extends ProcessWindowFunction<Fil
     public void open(Configuration parameters) throws Exception {
         super.open(parameters);
         MetricGroup metricGroup = getRuntimeContext().getMetricGroup();
-        duplicateChunkCounter = metricGroup.counter("duplicateChunkCount");
-        combineErrorCounter = metricGroup.counter("combineErrorCount");
-        metricGroup.meter("duplicateChunkPerSecond", new MeterView(duplicateChunkCounter));
-        metricGroup.meter("combineErrorPerSecond", new MeterView(combineErrorCounter));
+        duplicateChunksCounter = metricGroup.counter("duplicateChunksCount");
+        combineErrorChunksCounter = metricGroup.counter("combineErrorChunksCount");
+        metricGroup.meter("numDuplicateChunksInPerSecond", new MeterView(duplicateChunksCounter));
+        metricGroup.meter("numChunksCombineErrorPerSecond", new MeterView(combineErrorChunksCounter));
     }
 
     @Override
@@ -50,8 +50,8 @@ public class CombineChunkProcessWindowFunction extends ProcessWindowFunction<Fil
 
     private List<FileChunk> combine(Iterable<FileChunk> input) {
         List<FileChunk> combinedFileChunkList = new ArrayList<>();
+        List<FileChunk> originalFileChunkList = StreamSupport.stream(input.spliterator(), false).collect(Collectors.toList());
         try {
-            List<FileChunk> originalFileChunkList = StreamSupport.stream(input.spliterator(), false).collect(Collectors.toList());
             List<byte[]> waitingToCombineChunkList = new ArrayList<>();
             if (COMBINE_MODE_SEEK.equals(originalFileChunkList.get(0).getCombineMode())) {
                 // 按照offset排序
@@ -71,7 +71,7 @@ public class CombineChunkProcessWindowFunction extends ProcessWindowFunction<Fil
                         long actualOffset = currentFileChunk.getOffset();
                         if (expectedOffset > actualOffset) {// 期望offset大于当前offset，该块为重复块，跳过该块
                             duplicateCount++;
-                            duplicateChunkCounter.inc();
+                            duplicateChunksCounter.inc();
                         } else if (expectedOffset == actualOffset) {// 期望offset等于当前offset，将该块添加到待合并集合中
                             if (currentFileChunk.getLastChunkFlag() == 1) {
                                 lastChunkFlag = currentFileChunk.getLastChunkFlag();
@@ -129,7 +129,7 @@ public class CombineChunkProcessWindowFunction extends ProcessWindowFunction<Fil
             }
         } catch (Exception e) {
             LOG.error("Combiner chunk error.", e);
-            combineErrorCounter.inc();
+            combineErrorChunksCounter.inc(originalFileChunkList.size());
         }
         return combinedFileChunkList;
     }
