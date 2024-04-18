@@ -22,6 +22,10 @@ public class FileChunk implements Serializable {
     public FileChunk() {
     }
 
+    public FileChunk(String uuid) {
+        this.uuid = uuid;
+    }
+
     public FileChunk(String uuid, String fileType, long length, byte[] chunk, String combineMode, int chunkCount, long timestamp, Map<String, Object> meta, String chunkNumbers) {
         this.uuid = uuid;
         this.fileType = fileType;
@@ -144,17 +148,20 @@ public class FileChunk implements Serializable {
 
     @Override
     public String toString() {
+        String chunkData = chunk == null ? "null" : chunk.length + "";
         return "FileChunk{" +
                 "uuid='" + uuid + '\'' +
                 ", fileName='" + fileName + '\'' +
                 ", fileType='" + fileType + '\'' +
                 ", offset=" + offset +
                 ", length=" + length +
+                ", chunk=" + chunkData +
                 ", combineMode='" + combineMode + '\'' +
                 ", lastChunkFlag=" + lastChunkFlag +
                 ", chunkCount=" + chunkCount +
                 ", timestamp=" + timestamp +
                 ", meta=" + meta +
+                ", chunkNumbers='" + chunkNumbers + '\'' +
                 '}';
     }
 

@@ -22,8 +22,20 @@ import static com.zdjizhi.utils.PublicConstants.COMBINE_MODE_SEEK;
 public class CombineChunkProcessWindowFunction extends ProcessWindowFunction<FileChunk, FileChunk, String, TimeWindow> {
     private static final Log LOG = LogFactory.get();
 
+    public transient Counter completeFilesCounter;
+    public transient Counter completeEmlFilesCounter;
+    public transient Counter completeTxtFilesCounter;
+    public transient Counter startChunksCounter;
+    public transient Counter endChunksCounter;
+    public transient Counter chunksInCounter;
+    public transient Counter chunksOutCounter;
+    public transient Counter bytesInCounter;
+    public transient Counter bytesOutCounter;
     public transient Counter duplicateChunksCounter;
-    public transient Counter combineErrorChunksCounter;
+    public transient Counter errorChunksCounter;
+    public transient Counter nullChunksCounter;
+    public transient Counter nullTxtChunksCounter;
+    public transient Counter nullEmlChunksCounter;
     private final int fileMaxChunkCount;
 
     public CombineChunkProcessWindowFunction(int fileMaxChunkCount) {
@@ -33,17 +45,42 @@ public class CombineChunkProcessWindowFunction extends ProcessWindowFunction<Fil
     @Override
     public void open(Configuration parameters) throws Exception {
         super.open(parameters);
-        MetricGroup metricGroup = getRuntimeContext().getMetricGroup();
+        MetricGroup metricGroup = getRuntimeContext().getMetricGroup().addGroup("file_chunk_combiner", "window_combine_chunk");
+        startChunksCounter = metricGroup.counter("startChunksCount");
+        endChunksCounter = metricGroup.counter("endChunksCount");
         duplicateChunksCounter = metricGroup.counter("duplicateChunksCount");
-        combineErrorChunksCounter = metricGroup.counter("combineErrorChunksCount");
+        errorChunksCounter = metricGroup.counter("errorChunksCount");
+        chunksInCounter = metricGroup.counter("chunksInCount");
+        chunksOutCounter = metricGroup.counter("chunksOutCount");
+        bytesInCounter = metricGroup.counter("bytesInCount");
+        bytesOutCounter = metricGroup.counter("bytesOutCount");
+        completeFilesCounter = metricGroup.counter("completeFilesCount");
+        completeEmlFilesCounter = metricGroup.counter("completeEmlFilesCount");
+        completeTxtFilesCounter = metricGroup.counter("completeTxtFilesCount");
+        metricGroup.meter("numCompleteFilesOutPerSecond", new MeterView(completeFilesCounter));
+        metricGroup.meter("numCompleteEmlFilesOutPerSecond", new MeterView(completeEmlFilesCounter));
+        metricGroup.meter("numCompleteTxtFilesOutPerSecond", new MeterView(completeTxtFilesCounter));
+        metricGroup.meter("numStartChunksOutPerSecond", new MeterView(startChunksCounter));
+        metricGroup.meter("numEndChunksOutPerSecond", new MeterView(endChunksCounter));
+        metricGroup.meter("numChunksInPerSecond", new MeterView(chunksInCounter));
+        metricGroup.meter("numChunksOutPerSecond", new MeterView(chunksOutCounter));
+        metricGroup.meter("numBytesInPerSecond", new MeterView(bytesInCounter));
+        metricGroup.meter("numBytesOutPerSecond", new MeterView(bytesOutCounter));
+        metricGroup.meter("numErrorChunksPerSecond", new MeterView(errorChunksCounter));
         metricGroup.meter("numDuplicateChunksInPerSecond", new MeterView(duplicateChunksCounter));
-        metricGroup.meter("numChunksCombineErrorPerSecond", new MeterView(combineErrorChunksCounter));
+        nullChunksCounter = metricGroup.counter("nullChunksCount");
+        nullEmlChunksCounter = metricGroup.counter("nullTxtChunksCount");
+        nullTxtChunksCounter = metricGroup.counter("nullEmlChunksCount");
+        metricGroup.meter("numNullFilesOutPerSecond", new MeterView(nullChunksCounter));
+        metricGroup.meter("numNullEmlFilesOutPerSecond", new MeterView(nullEmlChunksCounter));
+        metricGroup.meter("numNullTxtFilesOutPerSecond", new MeterView(nullTxtChunksCounter));
     }
 
     @Override
     public void process(String string, Context context, Iterable<FileChunk> elements, Collector<FileChunk> out) {
         List<FileChunk> fileChunks = combine(elements);
         for (FileChunk fileChunk : fileChunks) {
+            calculateFileChunkMetrics(fileChunk);
             out.collect(fileChunk);
         }
     }
@@ -51,6 +88,7 @@ public class CombineChunkProcessWindowFunction extends ProcessWindowFunction<Fil
     private List<FileChunk> combine(Iterable<FileChunk> input) {
         List<FileChunk> combinedFileChunkList = new ArrayList<>();
         List<FileChunk> originalFileChunkList = StreamSupport.stream(input.spliterator(), false).collect(Collectors.toList());
+        chunksInCounter.inc(originalFileChunkList.size());
         try {
             List<byte[]> waitingToCombineChunkList = new ArrayList<>();
             if (COMBINE_MODE_SEEK.equals(originalFileChunkList.get(0).getCombineMode())) {
@@ -60,6 +98,7 @@ public class CombineChunkProcessWindowFunction extends ProcessWindowFunction<Fil
                 if (originalFileChunkIterator.hasNext()) {
                     int duplicateCount = 0;
                     FileChunk currentFileChunk = originalFileChunkIterator.next();
+                    bytesInCounter.inc(currentFileChunk.getLength());
                     int lastChunkFlag = currentFileChunk.getLastChunkFlag();
                     long startOffset = currentFileChunk.getOffset();
                     if (currentFileChunk.getChunk() != null && currentFileChunk.getChunk().length > 0) {
@@ -68,6 +107,7 @@ public class CombineChunkProcessWindowFunction extends ProcessWindowFunction<Fil
                     while (originalFileChunkIterator.hasNext()) {
                         long expectedOffset = currentFileChunk.getOffset() + currentFileChunk.getLength();
                         currentFileChunk = originalFileChunkIterator.next();
+                        bytesInCounter.inc(currentFileChunk.getLength());
                         long actualOffset = currentFileChunk.getOffset();
                         if (expectedOffset > actualOffset) {// 期望offset大于当前offset，该块为重复块，跳过该块
                             duplicateCount++;
@@ -81,7 +121,10 @@ public class CombineChunkProcessWindowFunction extends ProcessWindowFunction<Fil
                             }
                         } else {// 期望offset小于当前offset，说明缺块
                             if (waitingToCombineChunkList.size() > 0) {//将可合并的chunk合并，清空集合
-                                combinedFileChunkList.add(combineChunk(waitingToCombineChunkList, currentFileChunk.getUuid(), currentFileChunk.getFileName(), currentFileChunk.getFileType(), startOffset, currentFileChunk.getCombineMode(), lastChunkFlag, originalFileChunkList.get(0).getMeta(), 0, null));
+                                FileChunk fileChunk = combineChunk(waitingToCombineChunkList, currentFileChunk.getUuid(), currentFileChunk.getFileName(), currentFileChunk.getFileType(), startOffset, currentFileChunk.getCombineMode(), lastChunkFlag, originalFileChunkList.get(0).getMeta(), originalFileChunkList.get(0).getTimestamp(), null);
+                                if (fileChunk != null) {
+                                    combinedFileChunkList.add(fileChunk);
+                                }
                                 waitingToCombineChunkList.clear();
                             } else {
                                 if (lastChunkFlag == 1) {
@@ -97,7 +140,10 @@ public class CombineChunkProcessWindowFunction extends ProcessWindowFunction<Fil
                         }
                     }
                     if (waitingToCombineChunkList.size() > 0) {
-                        combinedFileChunkList.add(combineChunk(waitingToCombineChunkList, currentFileChunk.getUuid(), currentFileChunk.getFileName(), currentFileChunk.getFileType(), startOffset, currentFileChunk.getCombineMode(), lastChunkFlag, originalFileChunkList.get(0).getMeta(), 0, null));
+                        FileChunk fileChunk = combineChunk(waitingToCombineChunkList, currentFileChunk.getUuid(), currentFileChunk.getFileName(), currentFileChunk.getFileType(), startOffset, currentFileChunk.getCombineMode(), lastChunkFlag, originalFileChunkList.get(0).getMeta(), originalFileChunkList.get(0).getTimestamp(), null);
+                        if (fileChunk != null) {
+                            combinedFileChunkList.add(fileChunk);
+                        }
                     } else {
                         if (lastChunkFlag == 1) {
                             combinedFileChunkList.add(currentFileChunk);
@@ -113,6 +159,7 @@ public class CombineChunkProcessWindowFunction extends ProcessWindowFunction<Fil
                 long startTimestamp = originalFileChunkList.get(0).getTimestamp();
                 StringBuilder timestampAndSizes = new StringBuilder();
                 for (FileChunk originalFileChunk : originalFileChunkList) {
+                    bytesInCounter.inc(originalFileChunk.getLength());
                     byte[] chunk = originalFileChunk.getChunk();
                     if (chunk != null && chunk.length > 0) {
                         chunk = originalFileChunk.getChunk();
@@ -124,38 +171,76 @@ public class CombineChunkProcessWindowFunction extends ProcessWindowFunction<Fil
                     }
                 }
                 if (waitingToCombineChunkList.size() > 0) {
-                    combinedFileChunkList.add(combineChunk(waitingToCombineChunkList, originalFileChunkList.get(0).getUuid(), originalFileChunkList.get(0).getFileName(), originalFileChunkList.get(0).getFileType(), 0, "append", 0, originalFileChunkList.get(0).getMeta(), startTimestamp, timestampAndSizes.toString()));
+                    FileChunk fileChunk = combineChunk(waitingToCombineChunkList, originalFileChunkList.get(0).getUuid(), originalFileChunkList.get(0).getFileName(), originalFileChunkList.get(0).getFileType(), 0, "append", 0, originalFileChunkList.get(0).getMeta(), startTimestamp, timestampAndSizes.toString());
+                    if (fileChunk != null) {
+                        combinedFileChunkList.add(fileChunk);
+                    }
                 }
             }
+            chunksOutCounter.inc(combinedFileChunkList.size());
         } catch (Exception e) {
-            LOG.error("Combiner chunk error.", e);
-            combineErrorChunksCounter.inc(originalFileChunkList.size());
+            LOG.error("Combiner chunk error. uuid: " + originalFileChunkList.get(0).getUuid() + ", chunk count: " + originalFileChunkList.size() + ". ", e);
+            errorChunksCounter.inc(originalFileChunkList.size());
         }
         return combinedFileChunkList;
     }
 
     private FileChunk combineChunk(List<byte[]> byteList, String uuid, String fileName, String fileType, long offset, String combineMode, int lastChunkFlag, Map<String, Object> metaMap, long startTimestamp, String chunkNumbers) {
         FileChunk fileChunk = new FileChunk();
-        fileChunk.setChunkCount(byteList.size());
-        byte[][] bytes = new byte[byteList.size()][];
-        byteList.toArray(bytes);
-        byte[] newData = ArrayUtil.addAll(bytes);
-        if (COMBINE_MODE_SEEK.equals(combineMode)) {
-            fileChunk.setOffset(offset);
-            fileChunk.setLastChunkFlag(lastChunkFlag);
-        } else {
-            if (StringUtil.isNotEmpty(chunkNumbers)) {
-                fileChunk.setChunkNumbers(chunkNumbers);
+        try {
+            fileChunk.setChunkCount(byteList.size());
+            byte[][] bytes = new byte[byteList.size()][];
+            byteList.toArray(bytes);
+            byte[] newData = ArrayUtil.addAll(bytes);
+            if (COMBINE_MODE_SEEK.equals(combineMode)) {
+                fileChunk.setOffset(offset);
+                fileChunk.setLastChunkFlag(lastChunkFlag);
+            } else {
+                if (StringUtil.isNotEmpty(chunkNumbers)) {
+                    fileChunk.setChunkNumbers(chunkNumbers);
+                }
             }
+            fileChunk.setTimestamp(startTimestamp);
+            fileChunk.setFileType(fileType);
+            fileChunk.setUuid(uuid);
+            fileChunk.setChunk(newData);
+            fileChunk.setFileName(fileName);
+            fileChunk.setCombineMode(combineMode);
+            fileChunk.setLength(newData.length);
+            fileChunk.setMeta(metaMap);
+            bytesOutCounter.inc(newData.length);
+        } catch (Exception e) {
+            LOG.error("Combiner chunk error. uuid: " + uuid + ", chunk count: " + byteList.size() + ". ", e);
+            errorChunksCounter.inc(byteList.size());
+            fileChunk = null;
         }
-        fileChunk.setTimestamp(startTimestamp);
-        fileChunk.setFileType(fileType);
-        fileChunk.setUuid(uuid);
-        fileChunk.setChunk(newData);
-        fileChunk.setFileName(fileName);
-        fileChunk.setCombineMode(combineMode);
-        fileChunk.setLength(newData.length);
-        fileChunk.setMeta(metaMap);
         return fileChunk;
+    }
+
+    private void calculateFileChunkMetrics(FileChunk fileChunk) {
+        long offset = fileChunk.getOffset();
+        int lastChunkFlag = fileChunk.getLastChunkFlag();
+        String fileType = fileChunk.getFileType();
+        if (offset == 0 && lastChunkFlag == 1) {
+            completeFilesCounter.inc();
+            if ("eml".equals(fileType)) {
+                completeEmlFilesCounter.inc();
+            } else if ("txt".equals(fileType)) {
+                completeTxtFilesCounter.inc();
+            }
+            if (fileChunk.getChunk() == null) {
+                nullChunksCounter.inc();
+                if ("eml".equals(fileType)) {
+                    nullEmlChunksCounter.inc();
+                } else if ("txt".equals(fileType)) {
+                    nullTxtChunksCounter.inc();
+                }
+                LOG.info("send file data is null. " + fileChunk.toString());
+            }
+        } else if (offset == 0) {
+            startChunksCounter.inc();
+        } else if (lastChunkFlag == 1) {
+            endChunksCounter.inc();
+        }
     }
 }

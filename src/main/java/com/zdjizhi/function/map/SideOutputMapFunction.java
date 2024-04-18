@@ -1,4 +1,4 @@
-package com.zdjizhi.function;
+package com.zdjizhi.function.map;
 
 import com.zdjizhi.pojo.FileChunk;
 import org.apache.flink.api.common.functions.RichMapFunction;
@@ -16,7 +16,7 @@ public class SideOutputMapFunction extends RichMapFunction<FileChunk, FileChunk>
     @Override
     public void open(Configuration parameters) throws Exception {
         super.open(parameters);
-        MetricGroup metricGroup = getRuntimeContext().getMetricGroup();
+        MetricGroup metricGroup = getRuntimeContext().getMetricGroup().addGroup("file_chunk_combiner", "side_out_put");
         delayedChunksCounter = metricGroup.counter("delayedChunksCount");
         metricGroup.meter("numChunksDelayPerSecond", new MeterView(delayedChunksCounter));
     }

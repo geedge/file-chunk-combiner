@@ -1,6 +1,7 @@
 package com.zdjizhi.sink;
 
 import cn.hutool.core.io.IoUtil;
+import cn.hutool.core.util.StrUtil;
 import cn.hutool.log.Log;
 import cn.hutool.log.LogFactory;
 import com.zdjizhi.config.Configs;
@@ -9,6 +10,7 @@ import com.zdjizhi.utils.HBaseColumnConstants;
 import com.zdjizhi.utils.HBaseConnectionUtil;
 import com.zdjizhi.utils.PublicConstants;
 import com.zdjizhi.utils.PublicUtil;
+import org.apache.commons.jexl3.*;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.metrics.Counter;
 import org.apache.flink.metrics.MeterView;
@@ -29,16 +31,34 @@ public class HBaseSink extends RichSinkFunction<FileChunk> {
     private static final Log LOG = LogFactory.get();
 
     private final Configuration configuration;
-    public transient Counter sinkRequestsCounter;
-    public transient Counter sinkErrorRequestsCounter;
-    public transient Counter sinkFilesCounter;
-    public transient Counter sinkChunksCounter;
-    public transient Counter lessThan5KBChunksCounter;
+    public transient Counter chunksInCounter;
+    public transient Counter chunksOutCounter;
+    public transient Counter bytesInCounter;
+    public transient Counter bytesOutCounter;
+    public transient Counter errorChunksCounter;
+    public transient Counter filesCounter;
+    public transient Counter rateLimitDropChunksCounter;
+    public transient Counter lessThan1KBChunksCounter;
+    public transient Counter between1KBAnd5KBChunksCounter;
     public transient Counter between5KBAnd10KBChunksCounter;
-    public transient Counter between10KBAnd50KBChunksCounter;
-    public transient Counter between50KBAnd100KBChunksCounter;
+    public transient Counter between10KBAnd100KBChunksCounter;
     public transient Counter between100KBAnd1MBChunksCounter;
     public transient Counter greaterThan1MBChunksCounter;
+    public transient Counter lessThan10KBEmlChunksCounter;
+    public transient Counter between1MBAnd10MBEmlChunksCounter;
+    public transient Counter between10KBAnd100KBEmlChunksCounter;
+    public transient Counter between100KBAnd1MBEmlChunksCounter;
+    public transient Counter greaterThan10MBEmlChunksCounter;
+    public transient Counter lessThan10KBTxtChunksCounter;
+    public transient Counter between1MBAnd10MBTxtChunksCounter;
+    public transient Counter between10KBAnd100KBTxtChunksCounter;
+    public transient Counter between100KBAnd1MBTxtChunksCounter;
+    public transient Counter greaterThan10MBTxtChunksCounter;
+    public transient Counter emlChunksCounter;
+    public transient Counter txtChunksCounter;
+    public transient Counter htmlChunksCounter;
+    public transient Counter pcapngChunksCounter;
+    public transient Counter mediaChunksCounter;
     private boolean isAsync;
     private Connection syncHBaseConnection;
     private AsyncConnection AsyncHBaseConnection;
@@ -55,6 +75,12 @@ public class HBaseSink extends RichSinkFunction<FileChunk> {
     private int chunkCount;
     private long maxBatchSize;
     private long maxBatchCount;
+    private long rateLimitThreshold;
+    private String rateLimitExpression;
+    private long timestamp;
+    private long count;
+    private JexlExpression jexlExpression;
+    private JexlContext jexlContext;
 
     public HBaseSink(Configuration configuration) {
         this.configuration = configuration;
@@ -63,28 +89,63 @@ public class HBaseSink extends RichSinkFunction<FileChunk> {
     @Override
     public void open(Configuration parameters) throws Exception {
         super.open(parameters);
-        MetricGroup metricGroup = getRuntimeContext().getMetricGroup();
-        lessThan5KBChunksCounter = metricGroup.counter("lessThan5KBChunksCount");
+        MetricGroup metricGroup = getRuntimeContext().getMetricGroup().addGroup("file_chunk_combiner", "sink_hbase");
+        errorChunksCounter = metricGroup.counter("errorChunksCount");
+        chunksInCounter = metricGroup.counter("chunksInCount");
+        chunksOutCounter = metricGroup.counter("chunksOutCount");
+        bytesInCounter = metricGroup.counter("bytesInCount");
+        bytesOutCounter = metricGroup.counter("bytesOutCount");
+        filesCounter = metricGroup.counter("filesCount");
+        rateLimitDropChunksCounter = metricGroup.counter("rateLimitDropChunksCount");
+        metricGroup.meter("numChunksInPerSecond", new MeterView(chunksInCounter));
+        metricGroup.meter("numChunksOutPerSecond", new MeterView(chunksOutCounter));
+        metricGroup.meter("numBytesInPerSecond", new MeterView(bytesInCounter));
+        metricGroup.meter("numBytesOutPerSecond", new MeterView(bytesOutCounter));
+        metricGroup.meter("numErrorChunksPerSecond", new MeterView(errorChunksCounter));
+        metricGroup.meter("numFilesOutPerSecond", new MeterView(filesCounter));
+        metricGroup.meter("numChunksRateLimitDropPerSecond", new MeterView(rateLimitDropChunksCounter));
+        lessThan1KBChunksCounter = metricGroup.counter("lessThan1KBChunksCount");
+        between1KBAnd5KBChunksCounter = metricGroup.counter("between1KBAnd5KBChunksCount");
         between5KBAnd10KBChunksCounter = metricGroup.counter("between5KBAnd10KBChunksCount");
-        between10KBAnd50KBChunksCounter = metricGroup.counter("between10KBAnd50KBChunksCount");
-        between50KBAnd100KBChunksCounter = metricGroup.counter("between50KBAnd100KBChunksCount");
+        between10KBAnd100KBChunksCounter = metricGroup.counter("between10KBAnd100KBChunksCount");
         between100KBAnd1MBChunksCounter = metricGroup.counter("between100KBAnd1MBChunksCount");
         greaterThan1MBChunksCounter = metricGroup.counter("greaterThan1MBChunksCount");
-        metricGroup.meter("numLessThan5KBChunksOutPerSecond", new MeterView(lessThan5KBChunksCounter));
+        metricGroup.meter("numLessThan1KBChunksOutPerSecond", new MeterView(lessThan1KBChunksCounter));
+        metricGroup.meter("numBetween1KBAnd5KBChunksOutPerSecond", new MeterView(between1KBAnd5KBChunksCounter));
         metricGroup.meter("numBetween5KBAnd10KBChunksOutPerSecond", new MeterView(between5KBAnd10KBChunksCounter));
-        metricGroup.meter("numBetween10KBAnd50KBChunksOutPerSecond", new MeterView(between10KBAnd50KBChunksCounter));
-        metricGroup.meter("numBetween50KBAnd100KBChunkPsOuterSecond", new MeterView(between50KBAnd100KBChunksCounter));
+        metricGroup.meter("numBetween10KBAnd100KBChunksOutPerSecond", new MeterView(between10KBAnd100KBChunksCounter));
         metricGroup.meter("numBetween100KBAnd1MBChunksOutPerSecond", new MeterView(between100KBAnd1MBChunksCounter));
         metricGroup.meter("numGreaterThan1MBChunksOutPerSecond", new MeterView(greaterThan1MBChunksCounter));
-        sinkRequestsCounter = metricGroup.counter("sinkRequestsCount");
-        sinkErrorRequestsCounter = metricGroup.counter("sinkErrorRequestsCount");
-        sinkFilesCounter = metricGroup.counter("sinkFilesCount");
-        sinkChunksCounter = metricGroup.counter("sinkChunksCount");
-        metricGroup.meter("numRequestsSinkPerSecond", new MeterView(sinkRequestsCounter, 5));
-        metricGroup.meter("numErrorRequestsSinkPerSecond", new MeterView(sinkErrorRequestsCounter));
-        metricGroup.meter("numFilesSinkPerSecond", new MeterView(sinkFilesCounter));
-        metricGroup.meter("numChunksSinkPerSecond", new MeterView(sinkChunksCounter));
-
+        lessThan10KBEmlChunksCounter = metricGroup.counter("lessThan10KBEmlChunksCount");
+        between10KBAnd100KBEmlChunksCounter = metricGroup.counter("between10KBAnd100KBEmlChunksCount");
+        between100KBAnd1MBEmlChunksCounter = metricGroup.counter("between100KBAnd1MBEmlChunksCount");
+        between1MBAnd10MBEmlChunksCounter = metricGroup.counter("between1MBAnd10MBEmlChunksCount");
+        greaterThan10MBEmlChunksCounter = metricGroup.counter("greaterThan10MBEmlChunksCount");
+        metricGroup.meter("numLessThan10KBEmlChunksOutPerSecond", new MeterView(lessThan10KBEmlChunksCounter));
+        metricGroup.meter("numBetween10KBAnd100KBEmlChunksOutPerSecond", new MeterView(between10KBAnd100KBEmlChunksCounter));
+        metricGroup.meter("numBetween100KBAnd1MBEmlChunksOutPerSecond", new MeterView(between100KBAnd1MBEmlChunksCounter));
+        metricGroup.meter("numBetween1MBAnd10MBEmlChunksOutPerSecond", new MeterView(between1MBAnd10MBEmlChunksCounter));
+        metricGroup.meter("numGreaterThan10MBEmlChunksOutPerSecond", new MeterView(greaterThan10MBEmlChunksCounter));
+        lessThan10KBTxtChunksCounter = metricGroup.counter("lessThan10KBTxtChunksCount");
+        between10KBAnd100KBTxtChunksCounter = metricGroup.counter("between10KBAnd100KBTxtChunksCount");
+        between100KBAnd1MBTxtChunksCounter = metricGroup.counter("between100KBAnd1MBTxtChunksCount");
+        between1MBAnd10MBTxtChunksCounter = metricGroup.counter("between1MBAnd10MBTxtChunksCount");
+        greaterThan10MBTxtChunksCounter = metricGroup.counter("greaterThan10MBTxtChunksCount");
+        metricGroup.meter("numLessThan10KBTxtChunksOutPerSecond", new MeterView(lessThan10KBTxtChunksCounter));
+        metricGroup.meter("numBetween10KBAnd100KBTxtChunksOutPerSecond", new MeterView(between10KBAnd100KBTxtChunksCounter));
+        metricGroup.meter("numBetween100KBAnd1MBTxtChunksOutPerSecond", new MeterView(between100KBAnd1MBTxtChunksCounter));
+        metricGroup.meter("numBetween1MBAnd10MBTxtChunksOutPerSecond", new MeterView(between1MBAnd10MBTxtChunksCounter));
+        metricGroup.meter("numGreaterThan10MBTxtChunksOutPerSecond", new MeterView(greaterThan10MBTxtChunksCounter));
+        emlChunksCounter = metricGroup.counter("emlChunksCount");
+        txtChunksCounter = metricGroup.counter("txtChunksCount");
+        htmlChunksCounter = metricGroup.counter("htmlChunksCount");
+        pcapngChunksCounter = metricGroup.counter("pcapngChunksCount");
+        mediaChunksCounter = metricGroup.counter("mediaChunksCount");
+        metricGroup.meter("numEmlChunksOutPerSecond", new MeterView(emlChunksCounter));
+        metricGroup.meter("numTxtChunksOutPerSecond", new MeterView(txtChunksCounter));
+        metricGroup.meter("numHtmlChunksOutPerSecond", new MeterView(htmlChunksCounter));
+        metricGroup.meter("numPcapngChunksOutPerSecond", new MeterView(pcapngChunksCounter));
+        metricGroup.meter("numMediaChunksOutPerSecond", new MeterView(mediaChunksCounter));
         isAsync = configuration.getBoolean(Configs.SINK_ASYNC);
         if (isAsync) {
             AsyncHBaseConnection = HBaseConnectionUtil.getInstance(configuration).getAsyncHBaseConnection();
@@ -104,12 +165,54 @@ public class HBaseSink extends RichSinkFunction<FileChunk> {
         indexFilenamePutList = new ArrayList<>();
         chunkSize = 0;
         chunkCount = 0;
+        rateLimitThreshold = configuration.getLong(Configs.SINK_RATE_LIMIT_THRESHOLD);
+        rateLimitExpression = configuration.getString(Configs.SINK_RATE_LIMIT_EXCLUSION_EXPRESSION);
+        timestamp = System.currentTimeMillis();
+        count = 0;
+        JexlEngine jexlEngine = new JexlBuilder().create();
+        jexlExpression = jexlEngine.createExpression(rateLimitExpression);
+        jexlContext = new MapContext();
     }
 
     @Override
     public void invoke(FileChunk fileChunk, Context context) {
+        chunksInCounter.inc();
+        bytesInCounter.inc(fileChunk.getLength());
+        if (rateLimitThreshold > 0) {
+            count++;
+            if (System.currentTimeMillis() - timestamp < 1000 && count > rateLimitThreshold) {
+                if (checkFileChunk(fileChunk)) {
+                    sendFileChunk(fileChunk);
+                } else {
+                    rateLimitDropChunksCounter.inc();
+                }
+            } else if (System.currentTimeMillis() - timestamp >= 1000) {
+                if (checkFileChunk(fileChunk)) {
+                    sendFileChunk(fileChunk);
+                } else {
+                    rateLimitDropChunksCounter.inc();
+                    timestamp = System.currentTimeMillis();
+                    count = 0;
+                }
+            } else {
+                sendFileChunk(fileChunk);
+            }
+        } else {
+            sendFileChunk(fileChunk);
+        }
+    }
+
+    @Override
+    public void close() {
+        IoUtil.close(table);
+        IoUtil.close(indexTimeTable);
+        IoUtil.close(indexFilenameTable);
+        IoUtil.close(syncHBaseConnection);
+        IoUtil.close(AsyncHBaseConnection);
+    }
+
+    private void sendFileChunk(FileChunk fileChunk) {
         if (COMBINE_MODE_SEEK.equals(fileChunk.getCombineMode()) && configuration.get(Configs.SINK_BATCH)) {
-            sinkChunksCounter.inc();
             byte[] data = "".getBytes();
             if (fileChunk.getChunk() != null) {
                 data = fileChunk.getChunk();
@@ -146,7 +249,6 @@ public class HBaseSink extends RichSinkFunction<FileChunk> {
                 Put indexFilenamePut = new Put(Bytes.toBytes(indexFilenameKey));
                 indexFilenamePut.addColumn(HBaseColumnConstants.BYTE_FAMILY_META, HBaseColumnConstants.BYTE_COLUMN_FILENAME, Bytes.toBytes(fileChunk.getUuid()));
                 indexFilenamePutList.add(indexFilenamePut);
-                sinkFilesCounter.inc();
             } else {
                 Put metaPut = new Put(Bytes.toBytes(PublicUtil.getRowKey(fileChunk.getUuid())));
                 metaPut.addColumn(HBaseColumnConstants.BYTE_FAMILY_META, HBaseColumnConstants.BYTE_COLUMN_LAST_MODIFIED, Bytes.toBytes(timestamp));
@@ -154,18 +256,19 @@ public class HBaseSink extends RichSinkFunction<FileChunk> {
             }
             chunkCount++;
             chunkSize += chunkLength;
-            calculateChunkSize(chunkLength);
+            chunksOutCounter.inc();
+            bytesOutCounter.inc(chunkLength);
+            calculateFileChunkMetrics(fileChunk);
             if (chunkSize >= maxBatchSize || chunkCount >= maxBatchCount) {
                 if (isAsync) {
                     if (dataPutList.size() > 0) {
                         List<CompletableFuture<Object>> futures = asyncTable.batch(dataPutList);
-                        sinkRequestsCounter.inc();
                         CompletableFuture.supplyAsync(() -> {
                             for (CompletableFuture<Object> completableFuture : futures) {
                                 completableFuture.whenCompleteAsync((result, error) -> {
                                     if (error != null) {
                                         LOG.error("put chunk to hbase error. ", error.getMessage());
-                                        sinkErrorRequestsCounter.inc();
+                                        errorChunksCounter.inc();
                                     }
                                 });
                             }
@@ -175,44 +278,37 @@ public class HBaseSink extends RichSinkFunction<FileChunk> {
                     }
                     if (indexTimePutList.size() > 0) {
                         asyncIndexTimeTable.batch(indexTimePutList);
-                        sinkRequestsCounter.inc();
                         indexTimePutList.clear();
                     }
                     if (indexFilenamePutList.size() > 0) {
                         asyncIndexFilenameTable.batch(indexFilenamePutList);
-                        sinkRequestsCounter.inc();
                         indexFilenamePutList.clear();
                     }
                 } else {
                     if (dataPutList.size() > 0) {
                         try {
-                            sinkRequestsCounter.inc();
                             table.batch(dataPutList, null);
                         } catch (IOException | InterruptedException e) {
                             LOG.error("put chunk to hbase data table error. ", e.getMessage());
-                            sinkErrorRequestsCounter.inc();
+                            errorChunksCounter.inc(dataPutList.size());
                         } finally {
                             dataPutList.clear();
                         }
                     }
                     if (indexTimePutList.size() > 0) {
                         try {
-                            sinkRequestsCounter.inc();
                             indexTimeTable.batch(indexTimePutList, null);
                         } catch (IOException | InterruptedException e) {
                             LOG.error("put chunk to hbase index time table error. ", e.getMessage());
-                            sinkErrorRequestsCounter.inc();
                         } finally {
                             indexTimePutList.clear();
                         }
                     }
                     if (indexFilenamePutList.size() > 0) {
                         try {
-                            sinkRequestsCounter.inc();
                             indexFilenameTable.batch(indexFilenamePutList, null);
                         } catch (IOException | InterruptedException e) {
                             LOG.error("put chunk to hbase index filename table error. ", e.getMessage());
-                            sinkErrorRequestsCounter.inc();
                         } finally {
                             indexFilenamePutList.clear();
                         }
@@ -224,28 +320,70 @@ public class HBaseSink extends RichSinkFunction<FileChunk> {
         }
     }
 
-    @Override
-    public void close() {
-        IoUtil.close(table);
-        IoUtil.close(indexTimeTable);
-        IoUtil.close(indexFilenameTable);
-        IoUtil.close(syncHBaseConnection);
-        IoUtil.close(AsyncHBaseConnection);
+    private boolean checkFileChunk(FileChunk fileChunk) {
+        if (StrUtil.isNotEmpty(rateLimitExpression)) {
+            jexlContext.set(fileChunk.getClass().getSimpleName(), fileChunk);
+            return Boolean.parseBoolean(jexlExpression.evaluate(jexlContext).toString());
+        }
+        return false;
     }
 
-    private void calculateChunkSize(long length) {
-        if (length <= 5 * 1024) {
-            lessThan5KBChunksCounter.inc();
+    private void calculateFileChunkMetrics(FileChunk fileChunk) {
+        long length = fileChunk.getLength();
+        String fileType = fileChunk.getFileType();
+        if (length <= 1024) {
+            lessThan1KBChunksCounter.inc();
+        } else if (length <= 5 * 1024) {
+            between1KBAnd5KBChunksCounter.inc();
         } else if (length <= 10 * 1024) {
             between5KBAnd10KBChunksCounter.inc();
-        } else if (length <= 50 * 1024) {
-            between10KBAnd50KBChunksCounter.inc();
         } else if (length <= 100 * 1024) {
-            between50KBAnd100KBChunksCounter.inc();
+            between10KBAnd100KBChunksCounter.inc();
         } else if (length <= 1024 * 1024) {
             between100KBAnd1MBChunksCounter.inc();
         } else {
             greaterThan1MBChunksCounter.inc();
+        }
+        switch (fileType) {
+            case "eml":
+                emlChunksCounter.inc();
+                if (length <= 10 * 1024) {
+                    lessThan10KBEmlChunksCounter.inc();
+                } else if (length <= 100 * 1024) {
+                    between10KBAnd100KBEmlChunksCounter.inc();
+                } else if (length <= 1024 * 1024) {
+                    between100KBAnd1MBEmlChunksCounter.inc();
+                } else if (length <= 10 * 1024 * 1024) {
+                    between1MBAnd10MBEmlChunksCounter.inc();
+                } else {
+                    greaterThan10MBEmlChunksCounter.inc();
+                }
+                break;
+            case "html":
+                htmlChunksCounter.inc();
+                break;
+            case "txt":
+                txtChunksCounter.inc();
+                if (length <= 10 * 1024) {
+                    lessThan10KBTxtChunksCounter.inc();
+                } else if (length <= 100 * 1024) {
+                    between10KBAnd100KBTxtChunksCounter.inc();
+                } else if (length <= 1024 * 1024) {
+                    between100KBAnd1MBTxtChunksCounter.inc();
+                } else if (length <= 10 * 1024 * 1024) {
+                    between1MBAnd10MBTxtChunksCounter.inc();
+                } else {
+                    greaterThan10MBTxtChunksCounter.inc();
+                }
+                break;
+            case "pcapng":
+                pcapngChunksCounter.inc();
+                break;
+            default:
+                mediaChunksCounter.inc();
+        }
+        if (fileChunk.getLastChunkFlag() == 1) {
+            filesCounter.inc();
         }
     }
 }
