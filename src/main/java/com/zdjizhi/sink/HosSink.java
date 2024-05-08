@@ -28,6 +28,9 @@ import org.apache.http.util.EntityUtils;
 import java.io.IOException;
 import java.net.ConnectException;
 import java.util.*;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 import static com.zdjizhi.utils.HttpHeaderConstants.*;
 import static com.zdjizhi.utils.PublicConstants.*;
@@ -73,16 +76,16 @@ public class HosSink extends RichSinkFunction<FileChunk> {
     private String token;
     private volatile String bathPutUrl;
     private HashMap<String, String> hosMessage;
-    private String objectsMeta = "";
-    private String objectsOffset = "";
+    private String objectsMeta;
+    private String objectsOffset;
     private List<byte[]> byteList;
     private long maxBatchSize;
     private long maxBatchCount;
-    private long chunkSize = 0;
-    private int chunkCount = 0;
+    private long chunkSize;
+    private ScheduledExecutorService executorService;
     private long rateLimitThreshold;
     private String rateLimitExpression;
-    private long timestamp;
+    private volatile long timestamp;
     private long count;
     private JexlExpression jexlExpression;
     private JexlContext jexlContext;
@@ -167,47 +170,67 @@ public class HosSink extends RichSinkFunction<FileChunk> {
         } else {
             syncHttpClient = HttpClientUtil.getInstance(configuration).getSyncHttpClient();
         }
-        bathPutUrl = URLUtil.normalize(endpoint + "/hos/" + configuration.get(Configs.SINK_HOS_BUCKET) + "/" + PublicUtil.getUUID()) + "?multiFile";
-        maxBatchSize = configuration.getLong(Configs.SINK_BATCH_SIZE);
-        maxBatchCount = configuration.getInteger(Configs.SINK_BATCH_COUNT);
-        hosMessage = new HashMap<>();
-        objectsMeta = "";
-        objectsOffset = "";
-        byteList = new ArrayList<>();
-        rateLimitThreshold = configuration.getLong(Configs.SINK_RATE_LIMIT_THRESHOLD);
-        rateLimitExpression = configuration.getString(Configs.SINK_RATE_LIMIT_EXCLUSION_EXPRESSION);
         timestamp = System.currentTimeMillis();
-        count = 0;
-        JexlEngine jexlEngine = new JexlBuilder().create();
-        jexlExpression = jexlEngine.createExpression(rateLimitExpression);
-        jexlContext = new MapContext();
+        if (configuration.get(Configs.SINK_BATCH)) {
+            bathPutUrl = URLUtil.normalize(endpoint + "/hos/" + configuration.get(Configs.SINK_HOS_BUCKET) + "/" + PublicUtil.getUUID()) + "?multiFile";
+            maxBatchSize = configuration.getLong(Configs.SINK_BATCH_SIZE);
+            maxBatchCount = configuration.getInteger(Configs.SINK_BATCH_COUNT);
+            hosMessage = new HashMap<>();
+            byteList = new ArrayList<>();
+            objectsMeta = "";
+            objectsOffset = "";
+            chunkSize = 0;
+            executorService = Executors.newScheduledThreadPool(1);
+            long period = configuration.getInteger(Configs.SINK_BATCH_TIME);
+            executorService.scheduleWithFixedDelay(() -> {
+                if (System.currentTimeMillis() - timestamp > (period * 1000)) {
+                    if (!byteList.isEmpty()) {
+                        synchronized (this) {
+                            sendBatchData();
+                        }
+                    }
+                }
+            }, period, period, TimeUnit.SECONDS);
+        }
+        if (rateLimitThreshold > 0) {
+            rateLimitThreshold = configuration.getLong(Configs.SINK_RATE_LIMIT_THRESHOLD);
+            rateLimitExpression = configuration.getString(Configs.SINK_RATE_LIMIT_EXCLUSION_EXPRESSION);
+            count = 0;
+            JexlEngine jexlEngine = new JexlBuilder().create();
+            jexlExpression = jexlEngine.createExpression(rateLimitExpression);
+            jexlContext = new MapContext();
+        }
     }
 
     @Override
     public void invoke(FileChunk fileChunk, Context context) {
-        chunksInCounter.inc();
-        bytesInCounter.inc(fileChunk.getLength());
-        if (rateLimitThreshold > 0) {
-            count++;
-            if (System.currentTimeMillis() - timestamp < 1000 && count > rateLimitThreshold) {
-                if (checkFileChunk(fileChunk)) {
-                    sendFileChunk(fileChunk);
-                } else {
-                    rateLimitDropChunksCounter.inc();
-                }
-            } else if (System.currentTimeMillis() - timestamp >= 1000) {
-                if (checkFileChunk(fileChunk)) {
-                    sendFileChunk(fileChunk);
-                } else {
-                    rateLimitDropChunksCounter.inc();
-                    timestamp = System.currentTimeMillis();
+        synchronized (this) {
+            long currentTimeMillis = System.currentTimeMillis();
+            chunksInCounter.inc();
+            bytesInCounter.inc(fileChunk.getLength());
+            if (rateLimitThreshold > 0) {
+                count++;
+                if (currentTimeMillis - timestamp < 1000 && count > rateLimitThreshold) {
+                    if (checkFileChunk(fileChunk)) {
+                        sendFileChunk(fileChunk);
+                    } else {
+                        rateLimitDropChunksCounter.inc();
+                    }
+                } else if (currentTimeMillis - timestamp >= 1000) {
+                    if (checkFileChunk(fileChunk)) {
+                        sendFileChunk(fileChunk);
+                    } else {
+                        rateLimitDropChunksCounter.inc();
+                    }
+                    timestamp = currentTimeMillis;
                     count = 0;
+                } else {
+                    sendFileChunk(fileChunk);
                 }
             } else {
+                timestamp = currentTimeMillis;
                 sendFileChunk(fileChunk);
             }
-        } else {
-            sendFileChunk(fileChunk);
         }
     }
 
@@ -215,6 +238,9 @@ public class HosSink extends RichSinkFunction<FileChunk> {
     public void close() {
         IoUtil.close(syncHttpClient);
         IoUtil.close(asyncHttpClient);
+        if (executorService != null) {
+            executorService.shutdown();
+        }
     }
 
     private void sendFileChunk(FileChunk fileChunk) {
@@ -236,7 +262,7 @@ public class HosSink extends RichSinkFunction<FileChunk> {
                 }
                 hosMessage.put(HOS_PART_CHUNK_COUNT, fileChunk.getChunkCount() + "");
                 Map<String, Object> metaMap = fileChunk.getMeta();
-                if (metaMap != null && metaMap.size() > 0) {
+                if (metaMap != null && !metaMap.isEmpty()) {
                     for (String meta : metaMap.keySet()) {
                         hosMessage.put(HOS_META_PREFIX + StrUtil.toSymbolCase(meta, CharUtil.DASHED), metaMap.get(meta) + "");
                     }
@@ -245,28 +271,12 @@ public class HosSink extends RichSinkFunction<FileChunk> {
                 hosMessage.clear();
                 objectsOffset += chunkLength + ";";
                 byteList.add(data);
-                chunkCount++;
                 chunkSize += chunkLength;
                 chunksOutCounter.inc();
                 bytesOutCounter.inc(chunkLength);
                 calculateFileChunkMetrics(fileChunk);
-                if (chunkSize >= maxBatchSize || chunkCount >= maxBatchCount) {
-                    HttpPut httpPut = new HttpPut(bathPutUrl);
-                    httpPut.setHeader(TOKEN, token);
-                    httpPut.setHeader(HOS_UPLOAD_TYPE, UPLOAD_TYPE_APPENDV2);
-                    httpPut.setHeader(HOS_COMBINE_MODE, fileChunk.getCombineMode());
-                    httpPut.setHeader(HOS_OBJECTS_META, objectsMeta);
-                    httpPut.setHeader(HOS_OBJECTS_OFFSET, objectsOffset);
-                    byte[][] bytes = new byte[byteList.size()][];
-                    byteList.toArray(bytes);
-                    byte[] newData = ArrayUtil.addAll(bytes);
-                    httpPut.setEntity(new ByteArrayEntity(newData));
-                    byteList.clear();
-                    executeRequest(httpPut);
-                    objectsMeta = "";
-                    objectsOffset = "";
-                    chunkSize = 0;
-                    chunkCount = 0;
+                if (chunkSize >= maxBatchSize || byteList.size() >= maxBatchCount) {
+                    sendBatchData();
                 }
             } else {
                 String url = URLUtil.normalize(endpoint + "/hos/" + configuration.get(Configs.SINK_HOS_BUCKET) + "/" + fileChunk.getUuid());
@@ -292,7 +302,7 @@ public class HosSink extends RichSinkFunction<FileChunk> {
                 }
                 httpPut.setHeader(HOS_PART_CHUNK_COUNT, fileChunk.getChunkCount() + "");
                 Map<String, Object> metaMap = fileChunk.getMeta();
-                if (metaMap != null && metaMap.size() > 0) {
+                if (metaMap != null && !metaMap.isEmpty()) {
                     for (String meta : metaMap.keySet()) {
                         httpPut.setHeader(HOS_META_PREFIX + StrUtil.toSymbolCase(meta, CharUtil.DASHED), metaMap.get(meta) + "");
                     }
@@ -307,6 +317,24 @@ public class HosSink extends RichSinkFunction<FileChunk> {
             LOG.error("put part to hos error.", e);
             errorChunksCounter.inc();
         }
+    }
+
+    private void sendBatchData() {
+        HttpPut httpPut = new HttpPut(bathPutUrl);
+        httpPut.setHeader(TOKEN, token);
+        httpPut.setHeader(HOS_UPLOAD_TYPE, UPLOAD_TYPE_APPENDV2);
+        httpPut.setHeader(HOS_COMBINE_MODE, COMBINE_MODE_SEEK);
+        httpPut.setHeader(HOS_OBJECTS_META, objectsMeta);
+        httpPut.setHeader(HOS_OBJECTS_OFFSET, objectsOffset);
+        byte[][] bytes = new byte[byteList.size()][];
+        byteList.toArray(bytes);
+        byte[] newData = ArrayUtil.addAll(bytes);
+        httpPut.setEntity(new ByteArrayEntity(newData));
+        executeRequest(httpPut);
+        objectsMeta = "";
+        objectsOffset = "";
+        byteList.clear();
+        chunkSize = 0;
     }
 
     private void executeRequest(HttpPut httpPut) {

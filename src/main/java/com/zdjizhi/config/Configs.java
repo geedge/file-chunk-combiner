@@ -84,6 +84,9 @@ public class Configs {
     public static final ConfigOption<Long> SINK_BATCH_SIZE = ConfigOptions.key("sink.batch.size")
             .longType()
             .defaultValue(Long.MAX_VALUE);
+    public static final ConfigOption<Integer> SINK_BATCH_TIME = ConfigOptions.key("sink.batch.time")
+            .intType()
+            .defaultValue(5);
     public static final ConfigOption<String> SINK_FILTER_EXPRESSION = ConfigOptions.key("sink.filter.expression")
             .stringType()
             .defaultValue("");

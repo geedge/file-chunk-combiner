@@ -73,7 +73,6 @@ public class OssSinkByCaffeineCache extends RichSinkFunction<FileChunk> {
     private CloseableHttpClient syncHttpClient;
     private CloseableHttpAsyncClient asyncHttpClient;
     private List<String> endpointList;
-    private CaffeineCacheUtil caffeineCacheUtil;
     private Cache<String, FileChunk> cache;
 
     public OssSinkByCaffeineCache(Configuration configuration) {
@@ -92,8 +91,7 @@ public class OssSinkByCaffeineCache extends RichSinkFunction<FileChunk> {
         } else {
             syncHttpClient = HttpClientUtil.getInstance(configuration).getSyncHttpClient();
         }
-        caffeineCacheUtil = CaffeineCacheUtil.getInstance(configuration);
-        cache = caffeineCacheUtil.getCaffeineCache();
+        cache = CaffeineCacheUtil.getInstance(configuration).getCaffeineCache();
         metricGroup.gauge("cacheLength", (Gauge<Long>) () -> cache.estimatedSize());
         lessThan1KBChunksCounter = metricGroup.counter("lessThan1KBChunksCount");
         between1KBAnd5KBChunksCounter = metricGroup.counter("between1KBAnd5KBChunksCount");
@@ -183,8 +181,8 @@ public class OssSinkByCaffeineCache extends RichSinkFunction<FileChunk> {
             }
             FileChunk data = cache.getIfPresent(uuid + "_data");
             if (data != null) {
-                sendFile(data, meta);
                 cache.invalidate(uuid + "_data");
+                sendFile(data, meta);
             } else {
                 cache.put(fileChunk.getUuid() + "_meta", fileChunk);
             }
@@ -193,8 +191,8 @@ public class OssSinkByCaffeineCache extends RichSinkFunction<FileChunk> {
             bytesInCounter.inc(fileChunk.getLength());
             FileChunk meta = cache.getIfPresent(uuid + "_meta");
             if (meta != null) {
-                sendFile(fileChunk, meta.getMeta());
                 cache.invalidate(uuid + "_meta");
+                sendFile(fileChunk, meta.getMeta());
             } else {
                 cache.put(fileChunk.getUuid() + "_data", fileChunk);
             }
@@ -205,7 +203,6 @@ public class OssSinkByCaffeineCache extends RichSinkFunction<FileChunk> {
     public void close() {
         IoUtil.close(syncHttpClient);
         IoUtil.close(asyncHttpClient);
-        caffeineCacheUtil.close();
     }
 
     private void sendFile(FileChunk fileChunk, Map<String, Object> metaMap) {
@@ -322,21 +319,21 @@ public class OssSinkByCaffeineCache extends RichSinkFunction<FileChunk> {
         } else if (fileId.contains("_2")) {
             responseFilesCounter.inc();
         }
+        if (fileChunk.getChunk() == null) {
+            nullChunksCounter.inc();
+            if ("eml".equals(fileType)) {
+                nullEmlChunksCounter.inc();
+            } else if ("txt".equals(fileType)) {
+                nullTxtChunksCounter.inc();
+            }
+            LOG.info("send file data is null. " + fileChunk.toString());
+        }
         if (fileChunk.getOffset() == 0 && fileChunk.getLastChunkFlag() == 1) {
             completeFilesCounter.inc();
             if ("eml".equals(fileType)) {
                 completeEmlFilesCounter.inc();
             } else if ("txt".equals(fileType)) {
                 completeTxtFilesCounter.inc();
-            }
-            if (fileChunk.getChunk() == null) {
-                nullChunksCounter.inc();
-                if ("eml".equals(fileType)) {
-                    nullEmlChunksCounter.inc();
-                } else if ("txt".equals(fileType)) {
-                    nullTxtChunksCounter.inc();
-                }
-                LOG.info("send file data is null. " + fileChunk.toString());
             }
             if (fileId.contains("_1")) {
                 completeRequestFilesCounter.inc();

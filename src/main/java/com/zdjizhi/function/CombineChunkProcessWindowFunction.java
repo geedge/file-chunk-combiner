@@ -120,8 +120,8 @@ public class CombineChunkProcessWindowFunction extends ProcessWindowFunction<Fil
                                 waitingToCombineChunkList.add(currentFileChunk.getChunk());
                             }
                         } else {// 期望offset小于当前offset，说明缺块
-                            if (waitingToCombineChunkList.size() > 0) {//将可合并的chunk合并，清空集合
-                                FileChunk fileChunk = combineChunk(waitingToCombineChunkList, currentFileChunk.getUuid(), currentFileChunk.getFileName(), currentFileChunk.getFileType(), startOffset, currentFileChunk.getCombineMode(), lastChunkFlag, originalFileChunkList.get(0).getMeta(), originalFileChunkList.get(0).getTimestamp(), null);
+                            if (!waitingToCombineChunkList.isEmpty()) {//将可合并的chunk合并，清空集合
+                                FileChunk fileChunk = combineChunk(waitingToCombineChunkList, currentFileChunk.getUuid(), currentFileChunk.getFileName(), currentFileChunk.getFileType(), startOffset, currentFileChunk.getCombineMode(), lastChunkFlag, originalFileChunkList.get(0).getMeta(), currentFileChunk.getTimestamp(), null);
                                 if (fileChunk != null) {
                                     combinedFileChunkList.add(fileChunk);
                                 }
@@ -139,8 +139,8 @@ public class CombineChunkProcessWindowFunction extends ProcessWindowFunction<Fil
                             }
                         }
                     }
-                    if (waitingToCombineChunkList.size() > 0) {
-                        FileChunk fileChunk = combineChunk(waitingToCombineChunkList, currentFileChunk.getUuid(), currentFileChunk.getFileName(), currentFileChunk.getFileType(), startOffset, currentFileChunk.getCombineMode(), lastChunkFlag, originalFileChunkList.get(0).getMeta(), originalFileChunkList.get(0).getTimestamp(), null);
+                    if (!waitingToCombineChunkList.isEmpty()) {
+                        FileChunk fileChunk = combineChunk(waitingToCombineChunkList, currentFileChunk.getUuid(), currentFileChunk.getFileName(), currentFileChunk.getFileType(), startOffset, currentFileChunk.getCombineMode(), lastChunkFlag, originalFileChunkList.get(0).getMeta(), currentFileChunk.getTimestamp(), null);
                         if (fileChunk != null) {
                             combinedFileChunkList.add(fileChunk);
                         }

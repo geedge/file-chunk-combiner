@@ -17,7 +17,6 @@ import com.zdjizhi.trigger.LastChunkTrigger;
 import com.zdjizhi.trigger.MultipleTrigger;
 import org.apache.flink.api.common.eventtime.WatermarkStrategy;
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
-import org.apache.flink.api.java.functions.KeySelector;
 import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.streaming.api.datastream.*;
@@ -180,70 +179,9 @@ public class FileChunkCombiner {
                             .setParallelism(configuration.get(Configs.COMBINER_WINDOW_PARALLELISM))
                             .union(fileMetaSessionSingleOutputStreamOperator, fileMetaProxySingleOutputStreamOperator)
                             .keyBy(new FileChunkKeySelector())
-                            .addSink(new OssSinkByEhcache(configuration))
-                            .name("Oss")
-                            .setParallelism(configuration.get(Configs.SINK_PARALLELISM));
-                    break;
-                case "oss-caffeine":
-                    fileMetaSessionSingleOutputStreamOperator = environment.addSource(FileMetaKafkaConsumer.stringConsumer(configuration, configuration.get(Configs.KAFKA_FILE_META_SESSION_TOPIC)))
-                            .setParallelism(configuration.get(Configs.MAP_PARSE_FILE_META_PARALLELISM))
-                            .name(configuration.get(Configs.KAFKA_FILE_META_SESSION_TOPIC))
-                            .flatMap(new ParseSessionFileMetaFlatMapFunction())
-                            .setParallelism(configuration.get(Configs.MAP_PARSE_FILE_META_PARALLELISM))
-                            .name("Map: Parse Session File Meta")
-                            .filter(new FileChunkFilterFunction(configuration.getString(Configs.FILE_META_FILTER_EXPRESSION), "map_parse_session_file_meta"))
-                            .name("Filter: Map")
-                            .setParallelism(configuration.get(Configs.MAP_PARSE_FILE_META_PARALLELISM));
-                    fileMetaProxySingleOutputStreamOperator = environment.addSource(FileMetaKafkaConsumer.stringConsumer(configuration, configuration.get(Configs.KAFKA_FILE_META_PROXY_TOPIC)))
-                            .setParallelism(configuration.get(Configs.MAP_PARSE_FILE_META_PARALLELISM))
-                            .name(configuration.get(Configs.KAFKA_FILE_META_PROXY_TOPIC))
-                            .flatMap(new ParseProxyFileMetaFlatMapFunction())
-                            .setParallelism(configuration.get(Configs.MAP_PARSE_FILE_META_PARALLELISM))
-                            .name("Map: Parse Proxy File Meta")
-                            .filter(new FileChunkFilterFunction(configuration.getString(Configs.FILE_META_FILTER_EXPRESSION), "map_parse_proxy_file_meta"))
-                            .name("Filter: Map")
-                            .setParallelism(configuration.get(Configs.MAP_PARSE_FILE_META_PARALLELISM));
-                    windowStream
-                            .filter(new FileChunkFilterFunction(configuration.getString(Configs.SINK_OSS_FILTER_EXPRESSION), "sink_oss"))
-                            .name("Filter: Oss")
-                            .setParallelism(configuration.get(Configs.COMBINER_WINDOW_PARALLELISM))
-                            .union(fileMetaSessionSingleOutputStreamOperator, fileMetaProxySingleOutputStreamOperator)
-                            .keyBy(new FileChunkKeySelector())
                             .addSink(new OssSinkByCaffeineCache(configuration))
                             .name("Oss")
                             .setParallelism(configuration.get(Configs.SINK_PARALLELISM));
-                    break;
-                case "test":
-                    fileMetaSessionSingleOutputStreamOperator = environment.addSource(FileMetaKafkaConsumer.stringConsumer(configuration, configuration.get(Configs.KAFKA_FILE_META_SESSION_TOPIC)))
-                            .setParallelism(configuration.get(Configs.MAP_PARSE_FILE_META_PARALLELISM))
-                            .name(configuration.get(Configs.KAFKA_FILE_META_SESSION_TOPIC))
-                            .flatMap(new ParseSessionFileMetaFlatMapFunction())
-                            .setParallelism(configuration.get(Configs.MAP_PARSE_FILE_META_PARALLELISM))
-                            .name("Map: Parse Session File Meta")
-                            .filter(new FileChunkFilterFunction(configuration.getString(Configs.FILE_META_FILTER_EXPRESSION), "map_parse_session_file_meta"))
-                            .name("Filter: Map")
-                            .setParallelism(configuration.get(Configs.MAP_PARSE_FILE_META_PARALLELISM));
-                    fileMetaProxySingleOutputStreamOperator = environment.addSource(FileMetaKafkaConsumer.stringConsumer(configuration, configuration.get(Configs.KAFKA_FILE_META_PROXY_TOPIC)))
-                            .setParallelism(configuration.get(Configs.MAP_PARSE_FILE_META_PARALLELISM))
-                            .name(configuration.get(Configs.KAFKA_FILE_META_PROXY_TOPIC))
-                            .flatMap(new ParseProxyFileMetaFlatMapFunction())
-                            .setParallelism(configuration.get(Configs.MAP_PARSE_FILE_META_PARALLELISM))
-                            .name("Map: Parse Proxy File Meta")
-                            .filter(new FileChunkFilterFunction(configuration.getString(Configs.FILE_META_FILTER_EXPRESSION), "map_parse_proxy_file_meta"))
-                            .name("Filter: Map")
-                            .setParallelism(configuration.get(Configs.MAP_PARSE_FILE_META_PARALLELISM));
-                    KeyedStream<FileChunk, String> fileMetaStringKeyedStream = fileMetaSessionSingleOutputStreamOperator
-                            .union(fileMetaProxySingleOutputStreamOperator)
-                            .keyBy((KeySelector<FileChunk, String>) FileChunk::getUuid);
-                    windowStream
-                            .filter(new FileChunkFilterFunction(configuration.getString(Configs.SINK_OSS_FILTER_EXPRESSION), "sink_oss"))
-                            .name("Filter: Oss")
-                            .setParallelism(configuration.get(Configs.COMBINER_WINDOW_PARALLELISM))
-                            .keyBy((KeySelector<FileChunk, String>) FileChunk::getUuid)
-                            .connect(fileMetaStringKeyedStream)
-                            .process(new TestKeyedCoProcessFunction(configuration))
-                            .setParallelism(configuration.get(Configs.COMBINER_WINDOW_PARALLELISM))
-                            .name("Oss");
                     break;
             }
         }

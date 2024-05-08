@@ -23,6 +23,9 @@ import org.apache.hadoop.hbase.util.Bytes;
 import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 import static com.zdjizhi.utils.PublicConstants.*;
 import static com.zdjizhi.utils.HBaseColumnConstants.*;
@@ -61,7 +64,7 @@ public class HBaseSink extends RichSinkFunction<FileChunk> {
     public transient Counter mediaChunksCounter;
     private boolean isAsync;
     private Connection syncHBaseConnection;
-    private AsyncConnection AsyncHBaseConnection;
+    private AsyncConnection asyncHBaseConnection;
     private Table table;
     private Table indexTimeTable;
     private Table indexFilenameTable;
@@ -72,12 +75,12 @@ public class HBaseSink extends RichSinkFunction<FileChunk> {
     private List<Put> indexTimePutList;
     private List<Put> indexFilenamePutList;
     private long chunkSize;
-    private int chunkCount;
     private long maxBatchSize;
     private long maxBatchCount;
+    private ScheduledExecutorService executorService;
     private long rateLimitThreshold;
     private String rateLimitExpression;
-    private long timestamp;
+    private volatile long timestamp;
     private long count;
     private JexlExpression jexlExpression;
     private JexlContext jexlContext;
@@ -148,57 +151,75 @@ public class HBaseSink extends RichSinkFunction<FileChunk> {
         metricGroup.meter("numMediaChunksOutPerSecond", new MeterView(mediaChunksCounter));
         isAsync = configuration.getBoolean(Configs.SINK_ASYNC);
         if (isAsync) {
-            AsyncHBaseConnection = HBaseConnectionUtil.getInstance(configuration).getAsyncHBaseConnection();
-            asyncTable = AsyncHBaseConnection.getTable(TableName.valueOf("default:" + configuration.get(Configs.SINK_HOS_BUCKET)));
-            asyncIndexTimeTable = AsyncHBaseConnection.getTable(TableName.valueOf("default:index_time_" + configuration.get(Configs.SINK_HOS_BUCKET)));
-            asyncIndexFilenameTable = AsyncHBaseConnection.getTable(TableName.valueOf("default:index_filename_" + configuration.get(Configs.SINK_HOS_BUCKET)));
+            asyncHBaseConnection = HBaseConnectionUtil.getInstance(configuration).getAsyncHBaseConnection();
+            asyncTable = asyncHBaseConnection.getTable(TableName.valueOf("default:" + configuration.get(Configs.SINK_HOS_BUCKET)));
+            asyncIndexTimeTable = asyncHBaseConnection.getTable(TableName.valueOf("default:index_time_" + configuration.get(Configs.SINK_HOS_BUCKET)));
+            asyncIndexFilenameTable = asyncHBaseConnection.getTable(TableName.valueOf("default:index_filename_" + configuration.get(Configs.SINK_HOS_BUCKET)));
         } else {
             syncHBaseConnection = HBaseConnectionUtil.getInstance(configuration).getSyncHBaseConnection();
             table = syncHBaseConnection.getTable(TableName.valueOf("default:" + configuration.get(Configs.SINK_HOS_BUCKET)));
             indexTimeTable = syncHBaseConnection.getTable(TableName.valueOf("default:index_time_" + configuration.get(Configs.SINK_HOS_BUCKET)));
             indexFilenameTable = syncHBaseConnection.getTable(TableName.valueOf("default:index_filename_" + configuration.get(Configs.SINK_HOS_BUCKET)));
         }
-        maxBatchSize = configuration.getLong(Configs.SINK_BATCH_SIZE);
-        maxBatchCount = configuration.getInteger(Configs.SINK_BATCH_COUNT);
-        dataPutList = new ArrayList<>();
-        indexTimePutList = new ArrayList<>();
-        indexFilenamePutList = new ArrayList<>();
-        chunkSize = 0;
-        chunkCount = 0;
-        rateLimitThreshold = configuration.getLong(Configs.SINK_RATE_LIMIT_THRESHOLD);
-        rateLimitExpression = configuration.getString(Configs.SINK_RATE_LIMIT_EXCLUSION_EXPRESSION);
         timestamp = System.currentTimeMillis();
-        count = 0;
-        JexlEngine jexlEngine = new JexlBuilder().create();
-        jexlExpression = jexlEngine.createExpression(rateLimitExpression);
-        jexlContext = new MapContext();
+        if (configuration.get(Configs.SINK_BATCH)) {
+            maxBatchSize = configuration.getLong(Configs.SINK_BATCH_SIZE);
+            maxBatchCount = configuration.getInteger(Configs.SINK_BATCH_COUNT);
+            dataPutList = new ArrayList<>();
+            indexTimePutList = new ArrayList<>();
+            indexFilenamePutList = new ArrayList<>();
+            chunkSize = 0;
+            executorService = Executors.newScheduledThreadPool(1);
+            long period = configuration.getInteger(Configs.SINK_BATCH_TIME);
+            executorService.scheduleWithFixedDelay(() -> {
+                if (System.currentTimeMillis() - timestamp > (period * 1000)) {
+                    if (!dataPutList.isEmpty()) {
+                        synchronized (this) {
+                            sendBatchData();
+                        }
+                    }
+                }
+            }, period, period, TimeUnit.SECONDS);
+        }
+        if (rateLimitThreshold > 0) {
+            rateLimitThreshold = configuration.getLong(Configs.SINK_RATE_LIMIT_THRESHOLD);
+            rateLimitExpression = configuration.getString(Configs.SINK_RATE_LIMIT_EXCLUSION_EXPRESSION);
+            count = 0;
+            JexlEngine jexlEngine = new JexlBuilder().create();
+            jexlExpression = jexlEngine.createExpression(rateLimitExpression);
+            jexlContext = new MapContext();
+        }
     }
 
     @Override
     public void invoke(FileChunk fileChunk, Context context) {
-        chunksInCounter.inc();
-        bytesInCounter.inc(fileChunk.getLength());
-        if (rateLimitThreshold > 0) {
-            count++;
-            if (System.currentTimeMillis() - timestamp < 1000 && count > rateLimitThreshold) {
-                if (checkFileChunk(fileChunk)) {
-                    sendFileChunk(fileChunk);
-                } else {
-                    rateLimitDropChunksCounter.inc();
-                }
-            } else if (System.currentTimeMillis() - timestamp >= 1000) {
-                if (checkFileChunk(fileChunk)) {
-                    sendFileChunk(fileChunk);
-                } else {
-                    rateLimitDropChunksCounter.inc();
-                    timestamp = System.currentTimeMillis();
+        synchronized (this) {
+            long currentTimeMillis = System.currentTimeMillis();
+            chunksInCounter.inc();
+            bytesInCounter.inc(fileChunk.getLength());
+            if (rateLimitThreshold > 0) {
+                count++;
+                if (currentTimeMillis - timestamp < 1000 && count > rateLimitThreshold) {
+                    if (checkFileChunk(fileChunk)) {
+                        sendFileChunk(fileChunk);
+                    } else {
+                        rateLimitDropChunksCounter.inc();
+                    }
+                } else if (currentTimeMillis - timestamp >= 1000) {
+                    if (checkFileChunk(fileChunk)) {
+                        sendFileChunk(fileChunk);
+                    } else {
+                        rateLimitDropChunksCounter.inc();
+                    }
+                    timestamp = currentTimeMillis;
                     count = 0;
+                } else {
+                    sendFileChunk(fileChunk);
                 }
             } else {
+                timestamp = currentTimeMillis;
                 sendFileChunk(fileChunk);
             }
-        } else {
-            sendFileChunk(fileChunk);
         }
     }
 
@@ -208,7 +229,10 @@ public class HBaseSink extends RichSinkFunction<FileChunk> {
         IoUtil.close(indexTimeTable);
         IoUtil.close(indexFilenameTable);
         IoUtil.close(syncHBaseConnection);
-        IoUtil.close(AsyncHBaseConnection);
+        IoUtil.close(asyncHBaseConnection);
+        if (executorService != null) {
+            executorService.shutdown();
+        }
     }
 
     private void sendFileChunk(FileChunk fileChunk) {
@@ -254,70 +278,50 @@ public class HBaseSink extends RichSinkFunction<FileChunk> {
                 metaPut.addColumn(HBaseColumnConstants.BYTE_FAMILY_META, HBaseColumnConstants.BYTE_COLUMN_LAST_MODIFIED, Bytes.toBytes(timestamp));
                 dataPutList.add(metaPut);
             }
-            chunkCount++;
             chunkSize += chunkLength;
             chunksOutCounter.inc();
             bytesOutCounter.inc(chunkLength);
             calculateFileChunkMetrics(fileChunk);
-            if (chunkSize >= maxBatchSize || chunkCount >= maxBatchCount) {
-                if (isAsync) {
-                    if (dataPutList.size() > 0) {
-                        List<CompletableFuture<Object>> futures = asyncTable.batch(dataPutList);
-                        CompletableFuture.supplyAsync(() -> {
-                            for (CompletableFuture<Object> completableFuture : futures) {
-                                completableFuture.whenCompleteAsync((result, error) -> {
-                                    if (error != null) {
-                                        LOG.error("put chunk to hbase error. ", error.getMessage());
-                                        errorChunksCounter.inc();
-                                    }
-                                });
-                            }
-                            return null;
-                        });
-                        dataPutList.clear();
-                    }
-                    if (indexTimePutList.size() > 0) {
-                        asyncIndexTimeTable.batch(indexTimePutList);
-                        indexTimePutList.clear();
-                    }
-                    if (indexFilenamePutList.size() > 0) {
-                        asyncIndexFilenameTable.batch(indexFilenamePutList);
-                        indexFilenamePutList.clear();
-                    }
-                } else {
-                    if (dataPutList.size() > 0) {
-                        try {
-                            table.batch(dataPutList, null);
-                        } catch (IOException | InterruptedException e) {
-                            LOG.error("put chunk to hbase data table error. ", e.getMessage());
-                            errorChunksCounter.inc(dataPutList.size());
-                        } finally {
-                            dataPutList.clear();
-                        }
-                    }
-                    if (indexTimePutList.size() > 0) {
-                        try {
-                            indexTimeTable.batch(indexTimePutList, null);
-                        } catch (IOException | InterruptedException e) {
-                            LOG.error("put chunk to hbase index time table error. ", e.getMessage());
-                        } finally {
-                            indexTimePutList.clear();
-                        }
-                    }
-                    if (indexFilenamePutList.size() > 0) {
-                        try {
-                            indexFilenameTable.batch(indexFilenamePutList, null);
-                        } catch (IOException | InterruptedException e) {
-                            LOG.error("put chunk to hbase index filename table error. ", e.getMessage());
-                        } finally {
-                            indexFilenamePutList.clear();
-                        }
-                    }
-                }
-                chunkSize = 0;
-                chunkCount = 0;
+            if (chunkSize >= maxBatchSize || dataPutList.size() >= maxBatchCount) {
+                sendBatchData();
             }
         }
+    }
+
+    private void sendBatchData() {
+        if (isAsync) {
+            List<CompletableFuture<Object>> futures = asyncTable.batch(dataPutList);
+            CompletableFuture.supplyAsync(() -> {
+                for (CompletableFuture<Object> completableFuture : futures) {
+                    completableFuture.whenCompleteAsync((result, error) -> {
+                        if (error != null) {
+                            LOG.error("Put chunk to hbase error. ", error.getMessage());
+                            errorChunksCounter.inc();
+                        }
+                    });
+                }
+                return null;
+            });
+            dataPutList.clear();
+            asyncIndexTimeTable.batch(indexTimePutList);
+            indexTimePutList.clear();
+            asyncIndexFilenameTable.batch(indexFilenamePutList);
+            indexFilenamePutList.clear();
+        } else {
+            try {
+                table.batch(dataPutList, null);
+                indexTimeTable.batch(indexTimePutList, null);
+                indexFilenameTable.batch(indexFilenamePutList, null);
+            } catch (IOException | InterruptedException e) {
+                LOG.error("Put chunk to hbase error. ", e.getMessage());
+                errorChunksCounter.inc(dataPutList.size());
+            } finally {
+                dataPutList.clear();
+                indexTimePutList.clear();
+                indexFilenamePutList.clear();
+            }
+        }
+        chunkSize = 0;
     }
 
     private boolean checkFileChunk(FileChunk fileChunk) {
