@@ -630,20 +630,6 @@ public class FileChunkCombinerTests {
         }
     }
 
-    private static class ProcessWindowFunctionMock extends ProcessWindowFunction<FileChunk, FileChunk, String, TimeWindow> implements OutputTypeConfigurable<FileChunk> {
-        private static final long serialVersionUID = 1L;
-
-        private ProcessWindowFunctionMock() {
-        }
-
-        @Override
-        public void process(String s, Context context, Iterable<FileChunk> elements, Collector<FileChunk> out) throws Exception {
-        }
-
-        public void setOutputType(TypeInformation<FileChunk> outTypeInfo, ExecutionConfig executionConfig) {
-        }
-    }
-
     private StreamExecutionEnvironment createPipeline(int parallelism, SourceFunction<byte[]> source, long windowTime, long windowIdleTime) {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.setParallelism(parallelism);
@@ -656,7 +642,7 @@ public class FileChunkCombinerTests {
         Trigger<Object, TimeWindow> trigger = MultipleTrigger.of(triggers);
         env.addSource(source)
                 .map(new ParseMessagePackMapFunction())
-                .filter(new FileChunkFilterFunction("","test"))
+                .filter(new FileChunkFilterFunction("", "test"))
                 .assignTimestampsAndWatermarks(watermarkStrategy)
                 .keyBy(new FileChunkKeySelector(), BasicTypeInfo.STRING_TYPE_INFO)
                 .window(TumblingEventTimeWindows.of(Time.seconds(windowTime)))
@@ -714,6 +700,20 @@ public class FileChunkCombinerTests {
 //        Mockito.verify(ctx).globalState();
 //        windowFunction.close();
 //        Mockito.verify(mock).close();
+//    }
+//
+//    private static class ProcessWindowFunctionMock extends ProcessWindowFunction<FileChunk, FileChunk, String, TimeWindow> implements OutputTypeConfigurable<FileChunk> {
+//        private static final long serialVersionUID = 1L;
+//
+//        private ProcessWindowFunctionMock() {
+//        }
+//
+//        @Override
+//        public void process(String s, Context context, Iterable<FileChunk> elements, Collector<FileChunk> out) throws Exception {
+//        }
+//
+//        public void setOutputType(TypeInformation<FileChunk> outTypeInfo, ExecutionConfig executionConfig) {
+//        }
 //    }
 
 //    @Test
