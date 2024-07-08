@@ -79,8 +79,8 @@ public class HosSink extends RichSinkFunction<FileChunk> {
     private String objectsMeta;
     private String objectsOffset;
     private List<byte[]> byteList;
-    private long maxBatchSize;
-    private long maxBatchCount;
+    private long batchSize;
+    private long batchInterval;
     private long chunkSize;
     private ScheduledExecutorService executorService;
     private long rateLimitThreshold;
@@ -171,26 +171,23 @@ public class HosSink extends RichSinkFunction<FileChunk> {
             syncHttpClient = HttpClientUtil.getInstance(configuration).getSyncHttpClient();
         }
         timestamp = System.currentTimeMillis();
-        if (configuration.get(Configs.SINK_BATCH)) {
+        batchSize = configuration.getLong(Configs.SINK_HOS_BATCH_SIZE);
+        batchInterval = configuration.getInteger(Configs.SINK_HOS_BATCH_INTERVAL_MS);
+        if (batchSize > 0 && batchInterval > 0) {
             bathPutUrl = URLUtil.normalize(endpoint + "/hos/" + configuration.get(Configs.SINK_HOS_BUCKET) + "/" + PublicUtil.getUUID()) + "?multiFile";
-            maxBatchSize = configuration.getLong(Configs.SINK_BATCH_SIZE);
-            maxBatchCount = configuration.getInteger(Configs.SINK_BATCH_COUNT);
             hosMessage = new HashMap<>();
             byteList = new ArrayList<>();
             objectsMeta = "";
             objectsOffset = "";
             chunkSize = 0;
             executorService = Executors.newScheduledThreadPool(1);
-            long period = configuration.getInteger(Configs.SINK_BATCH_TIME);
             executorService.scheduleWithFixedDelay(() -> {
-                if (System.currentTimeMillis() - timestamp > (period * 1000)) {
+                synchronized (this) {
                     if (!byteList.isEmpty()) {
-                        synchronized (this) {
-                            sendBatchData();
-                        }
+                        sendBatchData();
                     }
                 }
-            }, period, period, TimeUnit.SECONDS);
+            }, batchInterval, batchInterval, TimeUnit.MILLISECONDS);
         }
         if (rateLimitThreshold > 0) {
             rateLimitThreshold = configuration.getLong(Configs.SINK_RATE_LIMIT_THRESHOLD);
@@ -228,7 +225,6 @@ public class HosSink extends RichSinkFunction<FileChunk> {
                     sendFileChunk(fileChunk);
                 }
             } else {
-                timestamp = currentTimeMillis;
                 sendFileChunk(fileChunk);
             }
         }
@@ -250,7 +246,7 @@ public class HosSink extends RichSinkFunction<FileChunk> {
                 data = fileChunk.getChunk();
             }
             long chunkLength = data.length;
-            if (configuration.get(Configs.SINK_BATCH)) {
+            if (batchSize > 0 && batchInterval > 0) {
                 hosMessage.put(HOS_META_FILE_TYPE, fileChunk.getFileType());
                 hosMessage.put(HOS_META_FILENAME, fileChunk.getUuid());
                 if (COMBINE_MODE_SEEK.equals(fileChunk.getCombineMode())) {
@@ -275,7 +271,7 @@ public class HosSink extends RichSinkFunction<FileChunk> {
                 chunksOutCounter.inc();
                 bytesOutCounter.inc(chunkLength);
                 calculateFileChunkMetrics(fileChunk);
-                if (chunkSize >= maxBatchSize || byteList.size() >= maxBatchCount) {
+                if (chunkSize >= batchSize) {
                     sendBatchData();
                 }
             } else {

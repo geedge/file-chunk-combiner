@@ -22,8 +22,8 @@ public class HBaseConnectionUtil {
         hbaseConfiguration.set(HConstants.ZOOKEEPER_QUORUM, configuration.getString(Configs.SINK_HBASE_ZOOKEEPER));
         hbaseConfiguration.set(HConstants.CLIENT_ZOOKEEPER_CLIENT_PORT, "2181");
         hbaseConfiguration.set(HConstants.ZOOKEEPER_ZNODE_PARENT, "/hbase");
-        hbaseConfiguration.set(HConstants.BULKLOAD_MAX_RETRIES_NUMBER, configuration.get(Configs.SINK_HBASE_RETRIES_NUMBER) + "");
-        hbaseConfiguration.set(HConstants.HBASE_RPC_TIMEOUT_KEY, configuration.get(Configs.SINK_HBASE_RPC_TIMEOUT) + "");
+        hbaseConfiguration.set(HConstants.HBASE_CLIENT_RETRIES_NUMBER, configuration.get(Configs.SINK_HBASE_RETRIES_NUMBER) + "");
+        hbaseConfiguration.set(HConstants.HBASE_RPC_TIMEOUT_KEY, configuration.get(Configs.SINK_HBASE_RPC_TIMEOUT_MS) + "");
         hbaseConfiguration.set(ConnectionConfiguration.MAX_KEYVALUE_SIZE_KEY, "1073741800");
         hbaseConfiguration.set(ConnectionConfiguration.WRITE_BUFFER_SIZE_KEY, configuration.get(Configs.SINK_HBASE_CLIENT_WRITE_BUFFER) + "");
         hbaseConfiguration.set(HConstants.HBASE_CLIENT_IPC_POOL_SIZE, configuration.get(Configs.SINK_HBASE_CLIENT_IPC_POOL_SIZE) + "");
@@ -51,6 +51,7 @@ public class HBaseConnectionUtil {
         try {
             asyncHBaseConnection = ConnectionFactory.createAsyncConnection(hbaseConfiguration).get();
         } catch (ExecutionException | InterruptedException e) {
+            Thread.currentThread().interrupt();
             throw new RuntimeException(e.getMessage());
         }
         return asyncHBaseConnection;

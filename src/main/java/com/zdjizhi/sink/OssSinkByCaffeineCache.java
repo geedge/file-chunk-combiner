@@ -84,14 +84,14 @@ public class OssSinkByCaffeineCache extends RichSinkFunction<FileChunk> {
         super.open(parameters);
         MetricGroup metricGroup = getRuntimeContext().getMetricGroup().addGroup("file_chunk_combiner", "sink_oss");
         endpointList = Arrays.asList(configuration.get(Configs.SINK_OSS_ENDPOINT).split(","));
-        isAsync = configuration.getBoolean(Configs.SINK_OSS_ASYNC);
+        isAsync = configuration.getBoolean(Configs.SINK_ASYNC);
         if (isAsync) {
             asyncHttpClient = HttpClientUtil.getInstance(configuration).getAsyncHttpClient();
             asyncHttpClient.start();
         } else {
             syncHttpClient = HttpClientUtil.getInstance(configuration).getSyncHttpClient();
         }
-        cache = CaffeineCacheUtil.getInstance(configuration).getCaffeineCache();
+        cache = CaffeineCacheUtil.getInstance(configuration.getLong(Configs.SINK_OSS_CACHE_SIZE), configuration.getLong(Configs.SINK_OSS_CACHE_TIME_MS)).getCaffeineCache();
         metricGroup.gauge("cacheLength", (Gauge<Long>) () -> cache.estimatedSize());
         lessThan1KBChunksCounter = metricGroup.counter("lessThan1KBChunksCount");
         between1KBAnd5KBChunksCounter = metricGroup.counter("between1KBAnd5KBChunksCount");

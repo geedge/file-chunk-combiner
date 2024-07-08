@@ -6,18 +6,14 @@ import cn.hutool.core.util.RandomUtil;
 import com.zdjizhi.config.Configs;
 import com.zdjizhi.function.*;
 import com.zdjizhi.function.map.ParseMessagePackMapFunction;
-import com.zdjizhi.function.map.SideOutputMapFunction;
 import com.zdjizhi.pojo.FileChunk;
 import com.zdjizhi.sink.HBaseSink;
 import com.zdjizhi.sink.HosSink;
 import com.zdjizhi.trigger.LastChunkOrNoDataInTimeTrigger;
+import com.zdjizhi.trigger.LastChunkTrigger;
 import com.zdjizhi.trigger.MultipleTrigger;
-import org.apache.flink.api.common.ExecutionConfig;
-import org.apache.flink.api.common.eventtime.WatermarkStrategy;
-import org.apache.flink.api.common.functions.RuntimeContext;
+import com.zdjizhi.utils.PublicUtil;
 import org.apache.flink.api.common.typeinfo.BasicTypeInfo;
-import org.apache.flink.api.common.typeinfo.TypeInformation;
-import org.apache.flink.api.java.typeutils.PojoTypeInfo;
 import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.testutils.MiniClusterResourceConfiguration;
@@ -26,38 +22,29 @@ import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.sink.SinkFunction;
 import org.apache.flink.streaming.api.functions.source.SourceFunction;
-import org.apache.flink.streaming.api.functions.windowing.ProcessWindowFunction;
 import org.apache.flink.streaming.api.operators.*;
 import org.apache.flink.streaming.api.transformations.OneInputTransformation;
 import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows;
+import org.apache.flink.streaming.api.windowing.assigners.TumblingProcessingTimeWindows;
 import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.streaming.api.windowing.triggers.EventTimeTrigger;
+import org.apache.flink.streaming.api.windowing.triggers.ProcessingTimeTrigger;
 import org.apache.flink.streaming.api.windowing.triggers.Trigger;
 import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
 import org.apache.flink.streaming.runtime.operators.windowing.WindowOperator;
-import org.apache.flink.streaming.runtime.operators.windowing.functions.InternalIterableProcessWindowFunction;
-import org.apache.flink.streaming.runtime.operators.windowing.functions.InternalWindowFunction;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
 import org.apache.flink.streaming.util.KeyedOneInputStreamOperatorTestHarness;
 import org.apache.flink.streaming.util.OneInputStreamOperatorTestHarness;
 import org.apache.flink.streaming.util.TestHarnessUtil;
-import org.apache.flink.streaming.util.functions.StreamingFunctionUtils;
 import org.apache.flink.test.util.MiniClusterWithClientResource;
-import org.apache.flink.util.Collector;
 import org.apache.flink.util.OutputTag;
 import org.junit.*;
-import org.mockito.Mockito;
-import org.mockito.invocation.InvocationOnMock;
-import org.mockito.stubbing.Answer;
 
 import java.io.*;
 import java.nio.file.Files;
 import java.nio.file.Paths;
-import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
-
-import static com.zdjizhi.utils.PublicConstants.COMBINE_MODE_APPEND;
 
 public class FileChunkCombinerTests {
     private File emlFile;
@@ -111,7 +98,7 @@ public class FileChunkCombinerTests {
         triggers.add(EventTimeTrigger.create());
         triggers.add(LastChunkOrNoDataInTimeTrigger.of(1000));
         Trigger<Object, TimeWindow> trigger = MultipleTrigger.of(triggers);
-        processWindowFunction = new CombineChunkProcessWindowFunction(Integer.MAX_VALUE);
+        processWindowFunction = new CombineChunkProcessWindowFunction();
         delayedChunkOutputTag = new OutputTag<FileChunk>("delayed-chunk") {
         };
         DataStreamSource<FileChunk> source = env.fromCollection(inputFileChunks);
@@ -162,34 +149,6 @@ public class FileChunkCombinerTests {
         Assert.assertEquals(0, mapFunction.txtChunksCounter.getCount());
         Assert.assertEquals(0, mapFunction.htmlChunksCounter.getCount());
         Assert.assertEquals(0, mapFunction.mediaChunksCounter.getCount());
-        testHarness.close();
-    }
-
-    @Test
-    public void testSideOutputMapFunction() throws Exception {
-        SideOutputMapFunction sideOutputMapFunction = new SideOutputMapFunction();
-        OneInputStreamOperatorTestHarness<FileChunk, FileChunk> testHarness = new OneInputStreamOperatorTestHarness<>(new StreamMap<>(sideOutputMapFunction));
-        testHarness.setup();
-        testHarness.open();
-        for (FileChunk fileChunk : inputFileChunks) {
-            testHarness.processElement(new StreamRecord<>(fileChunk));
-        }
-        ConcurrentLinkedQueue<Object> expectedOutput = new ConcurrentLinkedQueue<>();
-        for (FileChunk fileChunk : inputFileChunks) {
-            fileChunk.setChunkCount(1);
-            if (COMBINE_MODE_APPEND.equals(fileChunk.getCombineMode())) {
-                fileChunk.setChunkNumbers(fileChunk.getTimestamp() + "-" + fileChunk.getChunk().length + ";");
-            }
-            expectedOutput.add(new StreamRecord<>(fileChunk));
-        }
-        ConcurrentLinkedQueue<Object> actualOutput = testHarness.getOutput();
-        Assert.assertEquals(30, actualOutput.size());
-        TestHarnessUtil.assertOutputEqualsSorted("Output was not correct.", expectedOutput, actualOutput, (o1, o2) -> {
-            StreamRecord sr0 = (StreamRecord) o1;
-            StreamRecord sr1 = (StreamRecord) o2;
-            return ((FileChunk) sr0.getValue()).getUuid().compareTo(((FileChunk) sr1.getValue()).getUuid());
-        });
-        Assert.assertEquals(30, sideOutputMapFunction.delayedChunksCounter.getCount());
         testHarness.close();
     }
 
@@ -331,11 +290,13 @@ public class FileChunkCombinerTests {
         testHarness.close();
     }
 
+    //测试hos sink，需配置可用的hos地址
     @Test
     public void testHosSink() throws Exception {
         //测试单条上传
         configuration.setString(Configs.SINK_TYPE, "hos");
-        configuration.setBoolean(Configs.SINK_BATCH, false);
+        configuration.setLong(Configs.SINK_HOS_BATCH_SIZE, 0L);
+        configuration.setInteger(Configs.SINK_HOS_BATCH_INTERVAL_MS, 0);
         HosSink hosSink = new HosSink(configuration);
         StreamSink<FileChunk> fileChunkStreamSink = new StreamSink<>(hosSink);
         OneInputStreamOperatorTestHarness<FileChunk, Object> testHarness = new OneInputStreamOperatorTestHarness<>(fileChunkStreamSink);
@@ -343,7 +304,7 @@ public class FileChunkCombinerTests {
         testHarness.open();
         byte[] data = RandomUtil.randomString(1000).getBytes();
         //seek文件
-        FileChunk fileChunk = new FileChunk("0000000001", "eml", 0, data.length, data, "seek", 1, 5, System.currentTimeMillis() * 1000);
+        FileChunk fileChunk = new FileChunk(PublicUtil.getUUID(), "eml", 0, data.length, data, "seek", 1, 5, System.currentTimeMillis() * 1000);
         testHarness.processElement(new StreamRecord<>(fileChunk));
         Assert.assertEquals(1, hosSink.chunksInCounter.getCount());
         Assert.assertEquals(1, hosSink.chunksOutCounter.getCount());
@@ -356,7 +317,7 @@ public class FileChunkCombinerTests {
         Assert.assertEquals(0, hosSink.between100KBAnd1MBChunksCounter.getCount());
         Assert.assertEquals(0, hosSink.greaterThan1MBChunksCounter.getCount());
         //append文件
-        fileChunk = new FileChunk("0000000002", "pcapng", data.length, data, "append", 5, System.currentTimeMillis() * 1000, pcapngFileMeta, "1-200,2-200,3-200,4-200,5-200");
+        fileChunk = new FileChunk(PublicUtil.getUUID(), "pcapng", data.length, data, "append", 5, System.currentTimeMillis() * 1000, pcapngFileMeta, "1-200,2-200,3-200,4-200,5-200");
         testHarness.processElement(new StreamRecord<>(fileChunk));
         Assert.assertEquals(2, hosSink.chunksInCounter.getCount());
         Assert.assertEquals(2, hosSink.chunksOutCounter.getCount());
@@ -373,19 +334,18 @@ public class FileChunkCombinerTests {
         //测试批量上传
         data = RandomUtil.randomString(10000).getBytes();
         configuration.setString(Configs.SINK_TYPE, "hos");
-        configuration.setBoolean(Configs.SINK_BATCH, true);
-        configuration.setInteger(Configs.SINK_BATCH_COUNT, 10);
-        configuration.setInteger(Configs.SINK_BATCH_TIME, 2);
+        configuration.setLong(Configs.SINK_HOS_BATCH_SIZE, 1024*1024L);
+        configuration.setInteger(Configs.SINK_HOS_BATCH_INTERVAL_MS, 2000);
         hosSink = new HosSink(configuration);
         fileChunkStreamSink = new StreamSink<>(hosSink);
         testHarness = new OneInputStreamOperatorTestHarness<>(fileChunkStreamSink);
         testHarness.setup();
         testHarness.open();
-        fileChunk = new FileChunk("0000000001", "eml", 0, data.length, data, "seek", 1, 5, System.currentTimeMillis() * 1000);
+        fileChunk = new FileChunk(PublicUtil.getUUID(), "eml", 0, data.length, data, "seek", 1, 5, System.currentTimeMillis() * 1000);
         testHarness.processElement(new StreamRecord<>(fileChunk));
-        fileChunk = new FileChunk("0000000002", "eml", 0, data.length, data, "seek", 1, 5, System.currentTimeMillis() * 1000);
+        fileChunk = new FileChunk(PublicUtil.getUUID(), "eml", 0, data.length, data, "seek", 1, 5, System.currentTimeMillis() * 1000);
         testHarness.processElement(new StreamRecord<>(fileChunk));
-        Thread.sleep(configuration.getInteger(Configs.SINK_BATCH_TIME) * 1000L + 1000);
+        Thread.sleep(configuration.getInteger(Configs.SINK_HOS_BATCH_INTERVAL_MS) + 1000);
         Assert.assertEquals(2, hosSink.chunksInCounter.getCount());
         Assert.assertEquals(2, hosSink.chunksOutCounter.getCount());
         Assert.assertEquals(0, hosSink.errorChunksCounter.getCount());
@@ -399,23 +359,48 @@ public class FileChunkCombinerTests {
         testHarness.close();
     }
 
+    //测试hbase sink，需配置可用的hbase地址
     @Test
     public void testHBaseSink() throws Exception {
+        //测试单条上传
         configuration.setString(Configs.SINK_TYPE, "hbase");
-        configuration.setBoolean(Configs.SINK_BATCH, true);
-        configuration.setInteger(Configs.SINK_BATCH_COUNT, 10);
-        configuration.setInteger(Configs.SINK_BATCH_TIME, 2);
+        configuration.setLong(Configs.SINK_HBASE_BATCH_SIZE, 0L);
+        configuration.setInteger(Configs.SINK_HBASE_BATCH_INTERVAL_MS, 0);
         HBaseSink hBaseSink = new HBaseSink(configuration);
         StreamSink<FileChunk> fileChunkStreamSink = new StreamSink<>(hBaseSink);
         OneInputStreamOperatorTestHarness<FileChunk, Object> testHarness = new OneInputStreamOperatorTestHarness<>(fileChunkStreamSink);
         testHarness.setup();
         testHarness.open();
         byte[] data = RandomUtil.randomString(1000).getBytes();
-        FileChunk fileChunk = new FileChunk("0000000001", "eml", 0, data.length, data, "seek", 1, 5, System.currentTimeMillis());
+        FileChunk fileChunk = new FileChunk(PublicUtil.getUUID(), "eml", 0, data.length, data, "seek", 1, 5, System.currentTimeMillis());
         testHarness.processElement(new StreamRecord<>(fileChunk));
-        fileChunk = new FileChunk("0000000002", "eml", 0, data.length, data, "seek", 1, 5, System.currentTimeMillis());
+        Assert.assertEquals(1, hBaseSink.chunksInCounter.getCount());
+        Assert.assertEquals(1, hBaseSink.chunksOutCounter.getCount());
+        Assert.assertEquals(0, hBaseSink.errorChunksCounter.getCount());
+        Assert.assertEquals(1, hBaseSink.filesCounter.getCount());
+        Assert.assertEquals(1, hBaseSink.lessThan1KBChunksCounter.getCount());
+        Assert.assertEquals(0, hBaseSink.between1KBAnd5KBChunksCounter.getCount());
+        Assert.assertEquals(0, hBaseSink.between5KBAnd10KBChunksCounter.getCount());
+        Assert.assertEquals(0, hBaseSink.between10KBAnd100KBChunksCounter.getCount());
+        Assert.assertEquals(0, hBaseSink.between100KBAnd1MBChunksCounter.getCount());
+        Assert.assertEquals(0, hBaseSink.greaterThan1MBChunksCounter.getCount());
+        testHarness.close();
+
+        //测试批量上传
+        configuration.setString(Configs.SINK_TYPE, "hbase");
+        configuration.setLong(Configs.SINK_HBASE_BATCH_SIZE, 1024*1024L);
+        configuration.setInteger(Configs.SINK_HBASE_BATCH_INTERVAL_MS, 2000);
+        hBaseSink = new HBaseSink(configuration);
+        fileChunkStreamSink = new StreamSink<>(hBaseSink);
+        testHarness = new OneInputStreamOperatorTestHarness<>(fileChunkStreamSink);
+        testHarness.setup();
+        testHarness.open();
+        data = RandomUtil.randomString(1000).getBytes();
+        fileChunk = new FileChunk(PublicUtil.getUUID(), "eml", 0, data.length, data, "seek", 1, 5, System.currentTimeMillis());
         testHarness.processElement(new StreamRecord<>(fileChunk));
-        Thread.sleep(configuration.getInteger(Configs.SINK_BATCH_TIME) * 1000L + 1000);
+        fileChunk = new FileChunk(PublicUtil.getUUID(), "eml", 0, data.length, data, "seek", 1, 5, System.currentTimeMillis());
+        testHarness.processElement(new StreamRecord<>(fileChunk));
+        Thread.sleep(configuration.getInteger(Configs.SINK_HBASE_BATCH_INTERVAL_MS) + 1000);
         Assert.assertEquals(2, hBaseSink.chunksInCounter.getCount());
         Assert.assertEquals(2, hBaseSink.chunksOutCounter.getCount());
         Assert.assertEquals(0, hBaseSink.errorChunksCounter.getCount());
@@ -633,21 +618,20 @@ public class FileChunkCombinerTests {
     private StreamExecutionEnvironment createPipeline(int parallelism, SourceFunction<byte[]> source, long windowTime, long windowIdleTime) {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.setParallelism(parallelism);
-        WatermarkStrategy<FileChunk> watermarkStrategy = WatermarkStrategy
-                .<FileChunk>forBoundedOutOfOrderness(Duration.ofSeconds(0))
-                .withTimestampAssigner((FileChunk, timestamp) -> FileChunk.getTimestamp() / 1000);
+
         List<Trigger<Object, TimeWindow>> triggers = new ArrayList<>();
-        triggers.add(EventTimeTrigger.create());
-        triggers.add(LastChunkOrNoDataInTimeTrigger.of(windowIdleTime * 1000));
+        triggers.add(ProcessingTimeTrigger.create());
+        if (configuration.get(Configs.COMBINER_WINDOW_ENABLE_LAST_CHUNK_TRIGGER)) {
+            triggers.add(LastChunkTrigger.create());
+        }
         Trigger<Object, TimeWindow> trigger = MultipleTrigger.of(triggers);
         env.addSource(source)
                 .map(new ParseMessagePackMapFunction())
                 .filter(new FileChunkFilterFunction("", "test"))
-                .assignTimestampsAndWatermarks(watermarkStrategy)
                 .keyBy(new FileChunkKeySelector(), BasicTypeInfo.STRING_TYPE_INFO)
-                .window(TumblingEventTimeWindows.of(Time.seconds(windowTime)))
+                .window(TumblingProcessingTimeWindows.of(Time.seconds(windowTime)))
                 .trigger(trigger)
-                .process(new CombineChunkProcessWindowFunction(Integer.MAX_VALUE))
+                .process(new CombineChunkProcessWindowFunction())
                 .addSink(new CollectSink());
         return env;
     }

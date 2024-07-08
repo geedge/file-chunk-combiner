@@ -3,9 +3,7 @@ package com.zdjizhi.utils;
 import com.github.benmanes.caffeine.cache.Cache;
 import com.github.benmanes.caffeine.cache.Caffeine;
 import com.github.benmanes.caffeine.cache.Weigher;
-import com.zdjizhi.config.Configs;
 import com.zdjizhi.pojo.FileChunk;
-import org.apache.flink.configuration.Configuration;
 import org.checkerframework.checker.index.qual.NonNegative;
 import org.checkerframework.checker.nullness.qual.NonNull;
 
@@ -15,23 +13,23 @@ public class CaffeineCacheUtil {
     private static CaffeineCacheUtil caffeineCacheUtil = null;
     private static Cache<String, FileChunk> caffeineCache = null;
 
-    private CaffeineCacheUtil(Configuration configuration) {
+    private CaffeineCacheUtil(Long cacheSize, Long cacheTimeMs) {
         caffeineCache = Caffeine.newBuilder()
-//                .initialCapacity(configuration.getLong(Configs.FILE_META_CACHE_SIZE))
-                .maximumWeight(configuration.getLong(Configs.FILE_META_CACHE_SIZE))
+//                .initialCapacity(configuration.getLong(Configs.SINK_OSS_CACHE_SIZE))
+                .maximumWeight(cacheSize)
                 .weigher(new Weigher<String, FileChunk>() {
                     @Override
                     public @NonNegative int weigh(@NonNull String key, @NonNull FileChunk value) {
                         return (int) value.getLength();
                     }
                 })
-                .expireAfterWrite(configuration.get(Configs.FILE_META_CACHE_TIME), TimeUnit.SECONDS)
+                .expireAfterWrite(cacheTimeMs, TimeUnit.MILLISECONDS)
                 .build();
     }
 
-    public static synchronized CaffeineCacheUtil getInstance(Configuration configuration) {
+    public static synchronized CaffeineCacheUtil getInstance(Long cacheSize, Long cacheTimeMs) {
         if (null == caffeineCacheUtil) {
-            caffeineCacheUtil = new CaffeineCacheUtil(configuration);
+            caffeineCacheUtil = new CaffeineCacheUtil(cacheSize, cacheTimeMs);
         }
         return caffeineCacheUtil;
     }

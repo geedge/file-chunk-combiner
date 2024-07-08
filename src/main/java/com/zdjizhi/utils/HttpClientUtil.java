@@ -44,15 +44,15 @@ public class HttpClientUtil {
 
     private RequestConfig getRequestConfig() {
         return RequestConfig.custom()
-                .setConnectTimeout(configuration.get(Configs.SINK_HTTP_CONNECT_TIMEOUT))
-                .setConnectionRequestTimeout(configuration.get(Configs.SINK_HTTP_REQUEST_TIMEOUT))
-                .setSocketTimeout(configuration.get(Configs.SINK_HTTP_SOCKET_TIMEOUT))
+                .setConnectTimeout(configuration.get(Configs.SINK_HTTP_CLIENT_CONNECT_TIMEOUT_MS))
+                .setConnectionRequestTimeout(configuration.get(Configs.SINK_HTTP_CLIENT_REQUEST_TIMEOUT_MS))
+                .setSocketTimeout(configuration.get(Configs.SINK_HTTP_CLIENT_SOCKET_TIMEOUT_MS))
                 .build();
     }
 
     private HttpRequestRetryHandler getRetryHandler() {
         return (exception, executionCount, context) -> {
-            if (executionCount >= configuration.get(Configs.SINK_HTTP_ERROR_RETRY)) {
+            if (executionCount >= configuration.get(Configs.SINK_HTTP_CLIENT_RETRIES_NUMBER)) {
                 return false;
             }
             if (exception instanceof NoHttpResponseException) {// 如果服务器丢掉了连接，那么就重试
@@ -106,9 +106,9 @@ public class HttpClientUtil {
             // 创建ConnectionManager，添加Connection配置信息
             connManager = new PoolingHttpClientConnectionManager(socketFactoryRegistry);
             // 设置最大连接数
-            connManager.setMaxTotal(configuration.get(Configs.SINK_HTTP_MAX_TOTAL));
+            connManager.setMaxTotal(configuration.get(Configs.SINK_HTTP_CLIENT_MAX_TOTAL));
             // 设置每个连接的路由数
-            connManager.setDefaultMaxPerRoute(configuration.get(Configs.SINK_HTTP_MAX_PER_ROUTE));
+            connManager.setDefaultMaxPerRoute(configuration.get(Configs.SINK_HTTP_CLIENT_MAX_PER_ROUTE));
         } catch (KeyManagementException | NoSuchAlgorithmException e) {
             throw new RuntimeException(e.getMessage());
         }
@@ -146,8 +146,8 @@ public class HttpClientUtil {
                     .build();
             ConnectingIOReactor ioReactor = new DefaultConnectingIOReactor(ioReactorConfig);
             connManager = new PoolingNHttpClientConnectionManager(ioReactor);
-            connManager.setMaxTotal(configuration.get(Configs.SINK_HTTP_MAX_TOTAL));
-            connManager.setDefaultMaxPerRoute(configuration.get(Configs.SINK_HTTP_MAX_PER_ROUTE));
+            connManager.setMaxTotal(configuration.get(Configs.SINK_HTTP_CLIENT_MAX_TOTAL));
+            connManager.setDefaultMaxPerRoute(configuration.get(Configs.SINK_HTTP_CLIENT_MAX_PER_ROUTE));
         } catch (IOReactorException e) {
             throw new RuntimeException(e.getMessage());
         }

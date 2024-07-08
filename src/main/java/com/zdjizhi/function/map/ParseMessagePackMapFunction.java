@@ -188,9 +188,8 @@ public class ParseMessagePackMapFunction extends RichMapFunction<byte[], FileChu
         chunksInCounter.inc();
         bytesInCounter.inc(messagePackData.length);
         FileChunk fileChunk;
-        try {
+        try (MessageUnpacker messageUnpacker = MessagePack.newDefaultUnpacker(messagePackData)) {
             fileChunk = new FileChunk();
-            MessageUnpacker messageUnpacker = MessagePack.newDefaultUnpacker(messagePackData);
             int numFields = messageUnpacker.unpackMapHeader();
             Map<String, Object> metaMap = new HashMap<>();
             for (int i = 0; i < numFields; i++) {

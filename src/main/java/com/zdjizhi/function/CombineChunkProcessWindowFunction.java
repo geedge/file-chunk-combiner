@@ -36,11 +36,6 @@ public class CombineChunkProcessWindowFunction extends ProcessWindowFunction<Fil
     public transient Counter nullChunksCounter;
     public transient Counter nullTxtChunksCounter;
     public transient Counter nullEmlChunksCounter;
-    private final int fileMaxChunkCount;
-
-    public CombineChunkProcessWindowFunction(int fileMaxChunkCount) {
-        this.fileMaxChunkCount = fileMaxChunkCount;
-    }
 
     @Override
     public void open(Configuration parameters) throws Exception {
@@ -165,9 +160,6 @@ public class CombineChunkProcessWindowFunction extends ProcessWindowFunction<Fil
                         chunk = originalFileChunk.getChunk();
                         waitingToCombineChunkList.add(chunk);
                         timestampAndSizes.append(originalFileChunk.getTimestamp()).append("-").append(chunk.length).append(";");
-                    }
-                    if (waitingToCombineChunkList.size() > fileMaxChunkCount) {
-                        break;
                     }
                 }
                 if (waitingToCombineChunkList.size() > 0) {
