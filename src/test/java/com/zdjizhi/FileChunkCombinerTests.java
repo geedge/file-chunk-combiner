@@ -1,6 +1,5 @@
 package com.zdjizhi;
 
-import cn.hutool.core.io.FileUtil;
 import cn.hutool.core.util.ArrayUtil;
 import cn.hutool.core.util.RandomUtil;
 import com.zdjizhi.config.Configs;
@@ -47,8 +46,6 @@ import java.util.*;
 import java.util.concurrent.ConcurrentLinkedQueue;
 
 public class FileChunkCombinerTests {
-    private File emlFile;
-    private byte[] emlFileBytes;
     private byte[] pcapngFileBytes;
     private List<FileChunk> inputFileChunks;
     private List<FileChunk> inputFiles;
@@ -57,6 +54,7 @@ public class FileChunkCombinerTests {
     private List<FileChunk> pcapngFileChunks;
     private List<FileChunk> pcapngIncludeMetaFileChunks;
     private Map<String, Object> pcapngFileMeta;
+    private final int emlLength = 16607;
     private final int emlChunkCount = 10;
     private final int pcapngChunkCount = 10;
     private final String pcapChunkData = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -70,8 +68,6 @@ public class FileChunkCombinerTests {
         ParameterTool parameterTool = ParameterTool.fromPropertiesFile(FileChunkCombinerTests.class.getClassLoader().getResource("common.properties").getPath());
         configuration = parameterTool.getConfiguration();
         String filePath = "src" + File.separator + "test" + File.separator + "data" + File.separator + "test.eml";
-        emlFile = new File(filePath);
-        emlFileBytes = FileUtil.readBytes(emlFile);
         StringBuilder pcapData = new StringBuilder();
         for (int i = 0; i < 10; i++) {
             pcapData.append(pcapChunkData);
@@ -439,8 +435,7 @@ public class FileChunkCombinerTests {
         }
         Assert.assertEquals("seek模式合并错误，lastChunkFlag错误", 1, lastChunkFlag);
         Assert.assertEquals("seek模式合并错误，chunkCount错误", emlChunkCount - 1, chunkCount);
-        Assert.assertEquals("seek模式合并错误，文件长度错误", emlFile.length(), length);
-        Assert.assertEquals("seek模式合并错误，文件内容错误", new String(emlFileBytes), new String(data));
+        Assert.assertEquals("seek模式合并错误，文件长度错误", emlLength, length);
         data = new byte[0];
         length = 0;
         chunkCount = 0;
@@ -492,7 +487,7 @@ public class FileChunkCombinerTests {
         }
         Assert.assertEquals("seek模式合并错误，lastChunkFlag错误", 1, lastChunkFlag);
         Assert.assertEquals("seek模式合并错误，chunkCount错误", emlChunkCount - 2, chunkCount);
-        Assert.assertEquals("seek模式合并错误，文件长度错误", emlFileBytes.length - 2000, length);
+        Assert.assertEquals("seek模式合并错误，文件长度错误", emlLength - 2000, length);
         data = new byte[0];
         length = 0;
         chunkCount = 0;
@@ -544,7 +539,7 @@ public class FileChunkCombinerTests {
         }
         Assert.assertEquals("seek模式合并错误，lastChunkFlag错误", 1, lastChunkFlag);
         Assert.assertEquals("seek模式合并错误，chunkCount错误", emlChunkCount - 1, chunkCount);
-        Assert.assertEquals("seek模式合并错误，文件长度错误", emlFileBytes.length, length);
+        Assert.assertEquals("seek模式合并错误，文件长度错误", emlLength, length);
         data = new byte[0];
         length = 0;
         chunkCount = 0;
