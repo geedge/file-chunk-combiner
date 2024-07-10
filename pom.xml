@@ -10,9 +10,9 @@
 
     <repositories>
         <repository>
-            <id>nexus</id>
+            <id>nexus3</id>
             <name>Team Nexus Repository</name>
-            <url>http://192.168.40.153:8099/content/groups/public</url>
+            <url>http://192.168.40.153:8081/repository/public/</url>
         </repository>
         <repository>
             <id>maven-ali</id>
@@ -26,6 +26,18 @@
             </snapshots>
         </repository>
     </repositories>
+
+    <distributionManagement>
+        <repository>
+            <id>platform-releases</id>
+            <url>http://192.168.40.153:8081/repository/platform-release/</url>
+            <uniqueVersion>true</uniqueVersion>
+        </repository>
+        <snapshotRepository>
+            <id>platform-snapshots</id>
+            <url>http://192.168.40.153:8081/repository/platform-snapshot/</url>
+        </snapshotRepository>
+    </distributionManagement>
 
     <properties>
         <flink.version>1.13.1</flink.version>
