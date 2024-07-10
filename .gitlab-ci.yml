@@ -1,0 +1,36 @@
+image: 192.168.40.153:9080/common/maven:3.8.1-openjdk-11-slim-with-git
+
+variables:
+  MAVEN_CLI_OPTS: "--batch-mode --errors --show-version"
+
+stages:
+  - test
+  - build
+  - deploy
+
+# 代码测试
+test:
+  stage: test
+  script:
+    - mvn $MAVEN_CLI_OPTS clean test
+  only:
+    - merge_requests
+    - tags
+
+# 构建。一般用于构建 develop 分支上的 snapshot 版本。
+build:
+  stage: build
+  script:
+    - echo "$MAVEN_SETTINGS_XML" > /usr/share/maven/conf/settings.xml
+    - mvn clean site deploy -DskipTests
+  only:
+    - develop
+
+# 发布。用于发布候选版本，正式版本以及修订版等 release 版本。
+deploy:
+  stage: deploy
+  script:
+    - echo "$MAVEN_SETTINGS_XML" > /usr/share/maven/conf/settings.xml
+    - mvn $MAVEN_CLI_OPTS clean deploy -DskipTests
+  only:
+    - tags
