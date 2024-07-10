@@ -513,7 +513,7 @@ public class FileChunkCombinerTests {
     @Test
     public void testPipelineDuplicateChunk() throws Exception {
         CollectSink.values.clear();
-        long windowTime = 5;
+        long windowTime = 10;
         //添加重复chunk
         messagePackList.add(messagePackList.get(5));
         messagePackList.add(messagePackList.get(15));
