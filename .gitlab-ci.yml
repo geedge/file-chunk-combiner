@@ -14,7 +14,7 @@ test:
   script:
     - mvn $MAVEN_CLI_OPTS clean test
   only:
-    - merge_requests
+    - develop
     - tags
 
 # 构建。一般用于构建 develop 分支上的 snapshot 版本。
