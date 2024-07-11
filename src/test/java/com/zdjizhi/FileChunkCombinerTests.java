@@ -415,7 +415,7 @@ public class FileChunkCombinerTests {
         CollectSink.values.clear();
         long windowTime = 5;
         messagePackList.sort(Comparator.comparingInt(Arrays::hashCode));//打乱顺序
-        StreamExecutionEnvironment env = createPipeline(2, new ByteDataSource(messagePackList, 500, windowTime), windowTime, 1);
+        StreamExecutionEnvironment env = createPipeline(2, new ByteDataSource(messagePackList, 500, windowTime), windowTime);
         env.execute();
         List<FileChunk> fileChunks = CollectSink.values;
         Assert.assertFalse("合并错误,sink输出错误", fileChunks.isEmpty());
@@ -467,7 +467,7 @@ public class FileChunkCombinerTests {
         messagePackList.remove(15);
         messagePackList.remove(25);
         messagePackList.sort(Comparator.comparingInt(Arrays::hashCode));//打乱顺序
-        StreamExecutionEnvironment env = createPipeline(2, new ByteDataSource(messagePackList, 500, windowTime), windowTime, 1);
+        StreamExecutionEnvironment env = createPipeline(2, new ByteDataSource(messagePackList, 500, windowTime), windowTime);
         env.execute();
         List<FileChunk> fileChunks = CollectSink.values;
         Assert.assertFalse("合并错误,sink输出错误", fileChunks.isEmpty());
@@ -513,13 +513,13 @@ public class FileChunkCombinerTests {
     @Test
     public void testPipelineDuplicateChunk() throws Exception {
         CollectSink.values.clear();
-        long windowTime = 10;
+        long windowTime = 5;
         //添加重复chunk
         messagePackList.add(messagePackList.get(5));
         messagePackList.add(messagePackList.get(15));
         messagePackList.add(messagePackList.get(25));
         messagePackList.sort(Comparator.comparingInt(Arrays::hashCode));//打乱顺序
-        StreamExecutionEnvironment env = createPipeline(2, new ByteDataSource(messagePackList, 500, windowTime), windowTime, 1);
+        StreamExecutionEnvironment env = createPipeline(1, new ByteDataSource(messagePackList, 100, windowTime), windowTime);
         env.execute();
         List<FileChunk> fileChunks = CollectSink.values;
         Assert.assertFalse("合并错误,sink输出错误", fileChunks.isEmpty());
@@ -610,7 +610,7 @@ public class FileChunkCombinerTests {
         }
     }
 
-    private StreamExecutionEnvironment createPipeline(int parallelism, SourceFunction<byte[]> source, long windowTime, long windowIdleTime) {
+    private StreamExecutionEnvironment createPipeline(int parallelism, SourceFunction<byte[]> source, long windowTime) {
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.setParallelism(parallelism);
 
