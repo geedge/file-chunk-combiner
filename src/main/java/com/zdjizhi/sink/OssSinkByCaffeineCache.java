@@ -22,6 +22,7 @@ import org.apache.http.concurrent.FutureCallback;
 import org.apache.http.entity.ByteArrayEntity;
 import org.apache.http.impl.client.CloseableHttpClient;
 import org.apache.http.impl.nio.client.CloseableHttpAsyncClient;
+import org.apache.http.nio.reactor.IOReactorException;
 import org.apache.http.util.EntityUtils;
 
 import java.io.IOException;
@@ -206,48 +207,42 @@ public class OssSinkByCaffeineCache extends RichSinkFunction<FileChunk> {
     }
 
     private void sendFile(FileChunk fileChunk, Map<String, Object> metaMap) {
-        String url = "";
-        try {
-            byte[] data;
-            String fileType = fileChunk.getFileType();
-            if (fileChunk.getChunk() != null) {
-                data = fileChunk.getChunk();
-            } else {
-                data = "".getBytes();
-            }
-            String fileId = metaMap != null && metaMap.containsKey("fileId") ? metaMap.get("fileId").toString() : "";
-            String policyId = metaMap != null && metaMap.containsKey("policyId") ? metaMap.get("policyId").toString() : "0";
-            String serverIP = metaMap != null && metaMap.containsKey("serverIP") ? metaMap.get("serverIP").toString() : "";
-            String serverPort = metaMap != null && metaMap.containsKey("serverPort") ? metaMap.get("serverPort").toString() : "";
-            String clientIP = metaMap != null && metaMap.containsKey("clientIP") ? metaMap.get("clientIP").toString() : "";
-            String clientPort = metaMap != null && metaMap.containsKey("clientPort") ? metaMap.get("clientPort").toString() : "";
-            String domain = metaMap != null && metaMap.containsKey("httpHost") ? FormatUtils.getTopPrivateDomain(metaMap.get("httpHost").toString()) : "";
-            String subscriberId = metaMap != null && metaMap.containsKey("subscriberId") ? metaMap.get("subscriberId").toString() : "";
-            String foundTime = metaMap != null && metaMap.containsKey("foundTime") ? metaMap.get("foundTime").toString() : "0";
-            url = URLUtil.normalize(endpointList.get(RandomUtil.randomInt(endpointList.size())) + "/v3/upload?" +
-                    "cfg_id=" + policyId +
-                    "&file_id=" + fileId +
-                    "&file_type=" + fileType +
-                    "&found_time=" + foundTime +
-                    "&s_ip=" + serverIP +
-                    "&s_port=" + serverPort +
-                    "&d_ip=" + clientIP +
-                    "&d_port=" + clientPort +
-                    "&domain=" + domain +
-                    "&account=" + subscriberId);
-            HttpPost httpPost = new HttpPost(url);
-            httpPost.setEntity(new ByteArrayEntity(data));
-            executeRequest(httpPost, url);
-            chunksOutCounter.inc();
-            bytesOutCounter.inc(data.length);
-            calculateFileChunkMetrics(fileChunk, fileId);
-        } catch (Exception e) {
-            LOG.error("post file error. current url: " + url, e);
-            errorChunksCounter.inc();
+        byte[] data;
+        String fileType = fileChunk.getFileType();
+        if (fileChunk.getChunk() != null) {
+            data = fileChunk.getChunk();
+        } else {
+            data = "".getBytes();
         }
+        String fileId = metaMap != null && metaMap.containsKey("fileId") ? metaMap.get("fileId").toString() : "";
+        String policyId = metaMap != null && metaMap.containsKey("policyId") ? metaMap.get("policyId").toString() : "0";
+        String serverIP = metaMap != null && metaMap.containsKey("serverIP") ? metaMap.get("serverIP").toString() : "";
+        String serverPort = metaMap != null && metaMap.containsKey("serverPort") ? metaMap.get("serverPort").toString() : "";
+        String clientIP = metaMap != null && metaMap.containsKey("clientIP") ? metaMap.get("clientIP").toString() : "";
+        String clientPort = metaMap != null && metaMap.containsKey("clientPort") ? metaMap.get("clientPort").toString() : "";
+        String domain = metaMap != null && metaMap.containsKey("httpHost") ? FormatUtils.getTopPrivateDomain(metaMap.get("httpHost").toString()) : "";
+        String subscriberId = metaMap != null && metaMap.containsKey("subscriberId") ? metaMap.get("subscriberId").toString() : "";
+        String foundTime = metaMap != null && metaMap.containsKey("foundTime") ? metaMap.get("foundTime").toString() : "0";
+        String url = URLUtil.normalize(endpointList.get(RandomUtil.randomInt(endpointList.size())) + "/v3/upload?" +
+                "cfg_id=" + policyId +
+                "&file_id=" + fileId +
+                "&file_type=" + fileType +
+                "&found_time=" + foundTime +
+                "&s_ip=" + serverIP +
+                "&s_port=" + serverPort +
+                "&d_ip=" + clientIP +
+                "&d_port=" + clientPort +
+                "&domain=" + domain +
+                "&account=" + subscriberId);
+        HttpPost httpPost = new HttpPost(url);
+        httpPost.setEntity(new ByteArrayEntity(data));
+        executeRequest(httpPost, url);
+        chunksOutCounter.inc();
+        bytesOutCounter.inc(data.length);
+        calculateFileChunkMetrics(fileChunk, fileId);
     }
 
-    private void executeRequest(HttpPost httpPost, String url) {
+    private void executeRequest(HttpPost httpPost, String url) throws RuntimeException{
         if (isAsync) {
             asyncHttpClient.execute(httpPost, new FutureCallback<HttpResponse>() {
                 @Override
@@ -273,6 +268,9 @@ public class OssSinkByCaffeineCache extends RichSinkFunction<FileChunk> {
                 public void failed(Exception ex) {
                     LOG.error("post file error. current url: " + url, ex);
                     errorChunksCounter.inc();
+                    if (ex instanceof IllegalStateException || ex instanceof IOReactorException) {
+                        throw new RuntimeException(ex);
+                    }
                 }
 
                 @Override
