@@ -1,10 +1,10 @@
 package com.zdjizhi.function;
 
-import cn.hutool.core.util.ArrayUtil;
+import cn.hutool.core.util.PrimitiveArrayUtil;
 import cn.hutool.log.Log;
 import cn.hutool.log.LogFactory;
 import com.zdjizhi.pojo.FileChunk;
-import com.zdjizhi.utils.StringUtil;
+import org.apache.commons.lang.StringUtils;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.metrics.Counter;
 import org.apache.flink.metrics.MeterView;
@@ -162,7 +162,7 @@ public class CombineChunkProcessWindowFunction extends ProcessWindowFunction<Fil
                         timestampAndSizes.append(originalFileChunk.getTimestamp()).append("-").append(chunk.length).append(";");
                     }
                 }
-                if (waitingToCombineChunkList.size() > 0) {
+                if (!waitingToCombineChunkList.isEmpty()) {
                     FileChunk fileChunk = combineChunk(waitingToCombineChunkList, originalFileChunkList.get(0).getUuid(), originalFileChunkList.get(0).getFileName(), originalFileChunkList.get(0).getFileType(), 0, "append", 0, originalFileChunkList.get(0).getMeta(), startTimestamp, timestampAndSizes.toString());
                     if (fileChunk != null) {
                         combinedFileChunkList.add(fileChunk);
@@ -183,12 +183,12 @@ public class CombineChunkProcessWindowFunction extends ProcessWindowFunction<Fil
             fileChunk.setChunkCount(byteList.size());
             byte[][] bytes = new byte[byteList.size()][];
             byteList.toArray(bytes);
-            byte[] newData = ArrayUtil.addAll(bytes);
+            byte[] newData = PrimitiveArrayUtil.addAll(bytes);
             if (COMBINE_MODE_SEEK.equals(combineMode)) {
                 fileChunk.setOffset(offset);
                 fileChunk.setLastChunkFlag(lastChunkFlag);
             } else {
-                if (StringUtil.isNotEmpty(chunkNumbers)) {
+                if (StringUtils.isNotEmpty(chunkNumbers)) {
                     fileChunk.setChunkNumbers(chunkNumbers);
                 }
             }

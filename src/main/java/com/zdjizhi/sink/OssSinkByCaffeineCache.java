@@ -71,10 +71,10 @@ public class OssSinkByCaffeineCache extends RichSinkFunction<FileChunk> {
     public transient Counter between100KBAnd1MBTxtChunksCounter;
     public transient Counter greaterThan10MBTxtChunksCounter;
     private boolean isAsync;
-    private CloseableHttpClient syncHttpClient;
-    private CloseableHttpAsyncClient asyncHttpClient;
+    private transient CloseableHttpClient syncHttpClient;
+    private transient CloseableHttpAsyncClient asyncHttpClient;
     private List<String> endpointList;
-    private Cache<String, FileChunk> cache;
+    private transient Cache<String, FileChunk> cache;
 
     public OssSinkByCaffeineCache(Configuration configuration) {
         this.configuration = configuration;
@@ -242,9 +242,9 @@ public class OssSinkByCaffeineCache extends RichSinkFunction<FileChunk> {
         calculateFileChunkMetrics(fileChunk, fileId);
     }
 
-    private void executeRequest(HttpPost httpPost, String url) throws RuntimeException{
+    private void executeRequest(HttpPost httpPost, String url) throws RuntimeException {
         if (isAsync) {
-            asyncHttpClient.execute(httpPost, new FutureCallback<HttpResponse>() {
+            asyncHttpClient.execute(httpPost, new FutureCallback<>() {
                 @Override
                 public void completed(HttpResponse httpResponse) {
                     try {
@@ -275,7 +275,7 @@ public class OssSinkByCaffeineCache extends RichSinkFunction<FileChunk> {
 
                 @Override
                 public void cancelled() {
-
+                    LOG.error("post file error. request cancelled. url: " + url);
                 }
             });
         } else {

@@ -45,7 +45,7 @@ public class ParseProxyFileMetaFlatMapFunction extends RichFlatMapFunction<Strin
         try {
             chunksInCounter.inc();
             JSONObject record = JSONObject.parseObject(value);
-            if (record.containsKey("proxy_rule_list") && record.getJSONArray("proxy_rule_list").size() > 0) {
+            if (record.containsKey("proxy_rule_list") && !record.getJSONArray("proxy_rule_list").isEmpty()) {
                 if (record.containsKey("http_request_body")) {
                     FileChunk fileChunk = new FileChunk();
                     Map<String, Object> metaMap = new HashMap<>();
@@ -84,7 +84,7 @@ public class ParseProxyFileMetaFlatMapFunction extends RichFlatMapFunction<Strin
     }
 
     private void getFileMeta(JSONObject record, Map<String, Object> metaMap) {
-        metaMap.put("policyId", record.containsKey("monitor_rule_list") && record.getJSONArray("monitor_rule_list").size() > 0 ? record.getJSONArray("monitor_rule_list").getInteger(0) : 0);
+        metaMap.put("policyId", record.containsKey("monitor_rule_list") && !record.getJSONArray("monitor_rule_list").isEmpty() ? record.getJSONArray("monitor_rule_list").getInteger(0) : 0);
         metaMap.put("serverIP", record.getString("server_ip"));
         metaMap.put("serverPort", record.getInteger("server_port"));
         metaMap.put("clientIP", record.getString("client_ip"));

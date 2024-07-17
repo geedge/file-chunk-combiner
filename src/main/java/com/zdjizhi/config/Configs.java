@@ -91,6 +91,9 @@ public class Configs {
     public static final ConfigOption<Integer> SINK_HOS_BATCH_INTERVAL_MS = ConfigOptions.key("sink.hos.batch.interval.ms")
             .intType()
             .defaultValue(0);
+    public static final ConfigOption<Integer> SINK_HOS_HEALTH_CHECK_INTERVAL_MS = ConfigOptions.key("sink.hos.health.check.interval.ms")
+            .intType()
+            .defaultValue(60000);
 
     public static final ConfigOption<Integer> SINK_HTTP_CLIENT_MAX_TOTAL = ConfigOptions.key("sink.http.client.max.total")
             .intType()

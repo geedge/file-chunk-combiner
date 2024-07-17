@@ -1,6 +1,6 @@
 package com.zdjizhi.function;
 
-import cn.hutool.core.util.StrUtil;
+import cn.hutool.core.text.CharSequenceUtil;
 import cn.hutool.log.Log;
 import cn.hutool.log.LogFactory;
 import com.zdjizhi.pojo.FileChunk;
@@ -19,8 +19,8 @@ public class FileChunkFilterFunction extends RichFilterFunction<FileChunk> {
     public transient Counter filterChunksCounter;
     public transient Counter emlChunksCounter;
     public transient Counter txtChunksCounter;
-    private JexlExpression jexlExpression;
-    private JexlContext jexlContext;
+    private transient JexlExpression jexlExpression;
+    private transient JexlContext jexlContext;
 
     public FileChunkFilterFunction(String filterExpression, String functionName) {
         this.filterExpression = filterExpression;
@@ -48,7 +48,7 @@ public class FileChunkFilterFunction extends RichFilterFunction<FileChunk> {
             filterChunksCounter.inc();
             return false;
         }
-        if (StrUtil.isNotEmpty(filterExpression)) {
+        if (CharSequenceUtil.isNotEmpty(filterExpression)) {
             jexlContext.set("FileChunk", value);
             if (!Boolean.parseBoolean(jexlExpression.evaluate(jexlContext).toString())) {
                 filterChunksCounter.inc();

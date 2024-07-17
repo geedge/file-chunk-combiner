@@ -225,9 +225,7 @@ public class ParseMessagePackMapFunction extends RichMapFunction<byte[], FileChu
                     case "meta":
                         String meta = messageUnpacker.unpackString();
                         JSONObject metaJsonObject = JSONUtil.parseObj(meta);
-                        for (String key : metaJsonObject.keySet()) {
-                            metaMap.put(key, metaJsonObject.get(key));
-                        }
+                        metaJsonObject.keySet().forEach(key -> metaMap.put(key, metaJsonObject.get(key)));
                         fileChunk.setMeta(metaMap);
                         break;
                     default:
