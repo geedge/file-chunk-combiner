@@ -134,7 +134,7 @@
         <dependency>
             <groupId>org.msgpack</groupId>
             <artifactId>msgpack-core</artifactId>
-            <version>0.9.5</version>
+            <version>0.9.11</version>
         </dependency>
         <dependency>
             <groupId>org.msgpack</groupId>
@@ -210,7 +210,7 @@
         <dependency>
             <groupId>org.apache.hadoop</groupId>
             <artifactId>hadoop-common</artifactId>
-            <version>2.8.5</version>
+            <version>3.4.0</version>
             <scope>provided</scope>
             <exclusions>
                 <exclusion>
@@ -284,7 +284,7 @@
         <dependency>
             <groupId>com.google.guava</groupId>
             <artifactId>guava</artifactId>
-            <version>33.0.0-jre</version>
+            <version>33.7.1-jre</version>
         </dependency>
     </dependencies>
 
